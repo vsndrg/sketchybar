@@ -19,7 +19,7 @@ local apple = sbar.add("item", "apple.icon", {
   },
   label      = { drawing = false },
   background = {
-    height        = 26,
+    height        = 24,
     corner_radius = 8,
     color         = colors.bg1,
     border_width  = 0,
@@ -28,5 +28,29 @@ local apple = sbar.add("item", "apple.icon", {
   padding_right = 2,
   click_script  = "$CONFIG_DIR/helpers/menus/bin/menus -s 0",
 })
+
+apple:subscribe("mouse.entered", function(_)
+  apple:set({
+    icon = {
+      color = colors.black,
+    },
+    background = {
+      color        = colors.accent,
+      border_width = 0,
+    },
+  })
+end)
+
+apple:subscribe("mouse.exited", function(_)
+  apple:set({
+    icon = {
+      color = colors.white,
+    },
+    background = {
+      color        = colors.bg1,
+      border_width = 0,
+    },
+  })
+end)
 
 sbar.add("item", { width = 4 })

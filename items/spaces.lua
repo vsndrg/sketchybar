@@ -120,11 +120,52 @@ for i = 1, 10, 1 do
     end
   end)
 
+  space:subscribe("mouse.entered", function(_)
+    if not spaces_visible then return end
+
+    local is_focused = (i == focused_ws)
+
+    space:set({
+      icon = {
+        color = is_focused and colors.black or colors.white,
+      },
+      label = {
+        color = is_focused and colors.black or colors.white,
+      },
+      background = {
+        color        = is_focused and colors.accent or colors.with_alpha(colors.grey, 0.25),
+        border_width = is_focused and 0 or 1,
+        border_color = is_focused and colors.transparent or colors.grey,
+      },
+    })
+  end)
+
   space:subscribe("mouse.exited", function(_)
+    local is_focused = (i == focused_ws)
+
     if space:query().popup.drawing == "on" then
       space:set({ popup = { drawing = false } })
     end
+
+    space:set({
+      icon = {
+        color = is_focused and colors.black or colors.grey,
+      },
+      label = {
+        color = is_focused and colors.black or colors.grey,
+      },
+      background = {
+        color        = is_focused and colors.accent or colors.bg1,
+        border_width = 0,
+        border_color = colors.transparent,
+      },
+    })
   end)
+  -- space:subscribe("mouse.exited", function(_)
+  --   if space:query().popup.drawing == "on" then
+  --     space:set({ popup = { drawing = false } })
+  --   end
+  -- end)
 end
 
 -- Full refresh (async) — one aerospace call for all workspaces
