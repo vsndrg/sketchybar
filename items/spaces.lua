@@ -135,7 +135,7 @@ for i = 1, 10, 1 do
       background = {
         color        = is_focused and colors.accent or colors.with_alpha(colors.grey, 0.25),
         border_width = is_focused and 0 or 1,
-        border_color = is_focused and colors.transparent or colors.grey,
+        border_color = is_focused and colors.transparent or colors.accent,
       },
     })
   end)
