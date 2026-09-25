@@ -38,7 +38,9 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
 - AeroSpace build is signed with local cert `aerospace-local-codesign` (login keychain) so the Accessibility
   grant survives rebuilds. Build uses Command Line Tools (Xcode license not accepted).
 - borders runs from `~/.local/bin/borders` (brew agent disabled via `launchctl disable`), patched:
-  focus latency + `glow_radius=` option. `build.sh` builds offline from `~/.cache/borders-src`.
+  focus latency, `glow_radius=` option, window-radius (windows reporting no corner radius, e.g. WezTerm
+  without a title bar, get the smallest radius other windows report instead of 9). `build.sh` builds
+  offline from `~/.cache/borders-src`.
 - `sketchybarrc` runs `pkill -f 'barhelper daemon'`: never put that literal string in your own shell
   command during a reload (it kills your shell) — use `pgrep -f 'barhelpe[r] daemon'`.
 
