@@ -7,6 +7,7 @@ local config = require("config")
 local theme = require("lib.theme")
 local render = require("lib.render")
 local color = require("lib.color")
+local regions = require("lib.regions")
 
 local COUNT = 10
 local WIDTH = config.side_width.left
@@ -24,11 +25,13 @@ local item = sbar.add("item", "spaces", {
   background = { drawing = true, color = 0, image = { drawing = true, scale = config.image_scale } },
 })
 
-local state = { focused = 0, apps = {} }
+local state = { focused = 0, hovered = 0, apps = {} }
 local ranges = {}
 local seq = 0
 
-local function job_for(focused)
+-- hovered: the workspace under the cursor (ignored when it is the focused one,
+-- so the image is shared with the plain state and stays cached)
+local function job_for(focused, hovered)
   local j = render.base("spaces", palette)
   j.inset = config.pill.inset
   j.pad = 7              -- pill edge → digit
@@ -39,6 +42,8 @@ local function job_for(focused)
   j.pill_h = config.pill.height
   j.pill_r = config.pill.radius
   j.pill = color.hex(palette.pill)
+  j.hover = color.hex(palette.hover)
+  j.hover_fg = color.hex(palette.muted)
   j.fg = color.hex(palette.text)
   j.dim = color.hex(palette.dim)
   j.font = config.font.text
@@ -49,16 +54,23 @@ local function job_for(focused)
   for i = 1, COUNT do
     local apps = state.apps[i] or {}
     if #apps > 0 or i == focused then
-      table.insert(j.workspaces, { n = i, focused = i == focused, apps = apps })
+      table.insert(j.workspaces, {
+        n = i, focused = i == focused, hovered = (i == hovered and i ~= focused) or nil, apps = apps,
+      })
     end
   end
   return render.row({ canvas_w = WIDTH, align = "left", islands = { j } })
 end
 
+-- Every state one step away is rendered ahead: switching to any visible
+-- workspace, and hovering any of them, both hit the cache.
 local function prerender()
   local jobs = {}
   for i = 1, COUNT do
-    if i ~= state.focused and #(state.apps[i] or {}) > 0 then jobs[#jobs + 1] = job_for(i) end
+    if i ~= state.focused and #(state.apps[i] or {}) > 0 then
+      jobs[#jobs + 1] = job_for(i, state.hovered)
+      if i ~= state.hovered then jobs[#jobs + 1] = job_for(state.focused, i) end
+    end
   end
   if #jobs > 0 then render.run(jobs) end
 end
@@ -66,10 +78,15 @@ end
 local function show()
   seq = seq + 1
   local my = seq
-  render.run({ job_for(state.focused) }, function(m)
+  render.run({ job_for(state.focused, state.hovered) }, function(m)
     if my ~= seq then return end
     ranges = m[1].islands[1].ranges or {}
     item:set({ background = { image = { string = m[1].out } } })
+    local list = {}
+    for _, r in ipairs(ranges) do
+      list[#list + 1] = { "space." .. math.floor(r[1]), "left", config.bar.margin + r[2], config.bar.margin + r[3] }
+    end
+    regions.set("spaces", list)
     prerender()
   end)
 end
@@ -132,6 +149,15 @@ item:subscribe("aerospace_workspace_change", function(env)
   refresh()
 end)
 item:subscribe({ "aerospace_focus_change", "space_windows_change", "front_app_switched", "system_woke" }, refresh)
+
+sbar.add("event", "bar_hover")
+item:subscribe("bar_hover", function(env)
+  local n = tonumber((env.REGION or ""):match("^space%.(%d+)$")) or 0
+  if n ~= state.hovered then
+    state.hovered = n
+    show()
+  end
+end)
 
 -- One click event per action; the workspace is found from the cursor position.
 item:subscribe("mouse.clicked", function(env)

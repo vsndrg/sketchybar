@@ -373,18 +373,19 @@ func layoutSpaces(_ j: [String: Any]) -> Laid {
   let maxSlots = Int(num(j, "max_slots", 8))
   let wss = j["workspaces"] as? [[String: Any]] ?? []
 
-  struct WS { let n: Int; let focused: Bool; let label: CTLine; let labelW: CGFloat; let apps: [String]; let overflow: Int; let w: CGFloat }
+  struct WS { let n: Int; let focused: Bool; let hovered: Bool; let label: CTLine; let labelW: CGFloat; let apps: [String]; let overflow: Int; let w: CGFloat }
   var items: [WS] = []
   for ws in wss {
     let n = Int(num(ws, "n")), focused = (ws["focused"] as? Bool) ?? false
+    let hovered = !focused && ((ws["hovered"] as? Bool) ?? false)
     let all = ws["apps"] as? [String] ?? []
     let shown = all.count > maxSlots ? Array(all.prefix(maxSlots - 1)) : all
     let overflow = all.count > maxSlots ? all.count - shown.count : 0
-    let label = textLine("\(n)", f, col(j, focused ? "fg" : "dim"))
+    let label = textLine("\(n)", f, col(j, focused ? "fg" : (hovered ? "hover_fg" : "dim")))
     let lw = ceil(lineWidth(label))
     let slots = CGFloat(shown.count + (overflow > 0 ? 1 : 0))
     let w = slots > 0 ? pad + lw + numGap + slots * slot + tail : pad + lw + pad
-    items.append(WS(n: n, focused: focused, label: label, labelW: lw, apps: shown, overflow: overflow, w: w))
+    items.append(WS(n: n, focused: focused, hovered: hovered, label: label, labelW: lw, apps: shown, overflow: overflow, w: w))
   }
   let width = items.reduce(inset) { $0 + $1.w + inset }
   var ranges: [[CGFloat]] = []
@@ -398,9 +399,9 @@ func layoutSpaces(_ j: [String: Any]) -> Laid {
     let mid = h / 2
     var x = inset
     for ws in items {
-      if ws.focused {
+      if ws.focused || ws.hovered {
         let pill = CGRect(x: x, y: (h - pillH) / 2, width: ws.w, height: pillH)
-        ctx.addPath(squircle(pill, pillR)); ctx.setFillColor(col(j, "pill")); ctx.fillPath()
+        ctx.addPath(squircle(pill, pillR)); ctx.setFillColor(col(j, ws.focused ? "pill" : "hover")); ctx.fillPath()
       }
       drawLine(ctx, ws.label, x: x + pad, mid: mid, f)
       var ix = x + pad + ws.labelW + numGap
@@ -600,12 +601,12 @@ final class Daemon {
   let work = DispatchQueue(label: "accent")
 
   // Hover regions of the bar, written by lua: "strip <height>" then
-  // "<name> <d0> <d1>" — distances from the right edge of a screen, so the
-  // same regions apply to the bar on every display.
+  // "<name> <left|right> <d0> <d1>" — [d0, d1) measured from that edge of the
+  // screen under the cursor, so the same regions apply on every display.
   // Fixed-size items can't tell which island the cursor is over, so the daemon
   // does, and fires `bar_hover REGION=<name>` only when the region changes.
   let regionsPath = NSHomeDirectory() + "/.local/state/sketchybar/regions"
-  var regions: [(name: String, x0: CGFloat, x1: CGFloat)] = []
+  var regions: [(name: String, fromRight: Bool, d0: CGFloat, d1: CGFloat)] = []
   var strip: CGFloat = 32
   var regionsStamp: Date?
   var hovered = ""
@@ -620,8 +621,8 @@ final class Daemon {
       let f = line.split(separator: " ")
       guard f.count >= 2 else { continue }
       if f[0] == "strip", let h = Double(f[1]) { strip = CGFloat(h); continue }
-      if f.count >= 3, let a = Double(f[1]), let b = Double(f[2]) {
-        regions.append((String(f[0]), CGFloat(a), CGFloat(b)))
+      if f.count >= 4, f[1] == "left" || f[1] == "right", let a = Double(f[2]), let b = Double(f[3]) {
+        regions.append((String(f[0]), f[1] == "right", CGFloat(a), CGFloat(b)))
       }
     }
   }
@@ -632,8 +633,11 @@ final class Daemon {
     if let screen = NSScreen.screens.first(where: { NSMouseInRect(p, $0.frame, false) }),
        screen.frame.maxY - p.y <= strip {
       loadRegions()
-      let fromRight = screen.frame.maxX - p.x
-      name = regions.first { fromRight > $0.x0 && fromRight <= $0.x1 }?.name ?? ""
+      let fromLeft = p.x - screen.frame.minX, fromRight = screen.frame.maxX - p.x
+      name = regions.first {
+        let d = $0.fromRight ? fromRight : fromLeft
+        return d >= $0.d0 && d < $0.d1
+      }?.name ?? ""
     }
     guard name != hovered else { return }
     hovered = name

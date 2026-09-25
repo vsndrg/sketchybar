@@ -5,6 +5,7 @@ local config = require("config")
 local theme = require("lib.theme")
 local render = require("lib.render")
 local color = require("lib.color")
+local regions = require("lib.regions")
 
 local font = config.font
 local WIDTH = config.side_width.right
@@ -14,7 +15,6 @@ local RIGHT = config.bar.margin + WIDTH -- item's left edge, from the screen's r
 local palette = theme.palette()
 
 sbar.add("event", "layout_change")
-sbar.add("event", "bar_hover")
 
 -- Zero-width anchor at the right edge; the theme menu hangs off it.
 local anchor = sbar.add("item", "menu.anchor", {
@@ -69,13 +69,9 @@ local function text(str, style, c, extra)
 end
 
 local function write_regions()
-  local f = io.open(config.state .. "/regions", "w")
-  if not f then return end
-  f:write(string.format("strip %d\n", config.bar.height))
   local b = islands.battery
-  -- distances from the screen's right edge (see the helper's checkHover)
-  if b then f:write(string.format("battery %g %g\n", RIGHT - b.x1, RIGHT - b.x0)) end
-  f:close()
+  -- distances from the screen's right edge (see lib/regions.lua)
+  regions.set("status", b and { { "battery", "right", RIGHT - b.x1, RIGHT - b.x0 } } or {})
 end
 
 local function show()
