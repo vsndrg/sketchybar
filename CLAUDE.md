@@ -77,6 +77,13 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   visually, build a copy with `.readOnly`).
 - Accent: wallpaper hue via ScreenCaptureKit (aerial wallpapers have no file), tones in OKLCH
   (`lib/color.lua` `tone`), or custom (macOS accents / NSColorPanel). Also drives borders glow.
+- Island fill: OKLCH L 0.30, C 0.07 (tinted by the accent) — lifts macOS 26 dark-theme app icons
+  (near-black plates, L≈0.18). Tried: L 0.22 neutral (icons vanish), L 0.40 gray (user: "muddy,
+  looks inactive"). User keeps the dark icon theme; don't force light icon variants.
+- App icons follow the system icon theme (`AppleIconAppearanceTheme`/`…TintColor`): the daemon
+  watches `~/Library/Preferences` → `icon_theme_change`, theme is part of the islands' cache key.
+  Lag 5–10s = cfprefsd flushing .GlobalPreferences.plist; user accepted it (no polling). AppKit's
+  `NSWorkspaceIconAppearanceConfigurationDidChangeNotification` didn't reach a test process.
 - Text: SF Pro Text, optically centered on cap height by the helper. Battery tooltip wording = macOS menu.
 - Clock: the daemon fires `minute_change` on every minute boundary (one timer, re-aligned on wake /
   clock change); the next minute's image is pre-rendered, so the swap is a cache hit. Measured on
@@ -88,7 +95,7 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
 - Window order/position probe: `CGWindowListCopyWindowInfo` polled every 2–5ms (small Swift script).
 - Real mouse moves for hover tests: post `CGEvent` mouseMoved (small Swift script).
 
-## Status (2026-09-25)
+## Status (2026-09-26)
 Done and committed: bar rewrite, whole-island rendering, hover (workspaces + battery tooltip), themes,
 borders focus patch, AeroSpace flicker patch (+ race fix, bottom-up hide, layout restore, signing),
 bug-review fixes (15 items), multi-display basics (clicks/hover per screen, widths fit narrowest screen,
