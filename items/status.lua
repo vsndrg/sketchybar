@@ -27,8 +27,11 @@ local anchor = sbar.add("item", "menu.anchor", {
   popup = { align = "right", horizontal = true, height = config.popup.height, y_offset = config.popup.offset },
 })
 
--- global events and the clock routine: an invisible item that never goes away
-local events = sbar.add("item", "status", { drawing = false, updates = true, update_freq = 10 })
+-- global events: an invisible item that never goes away. The clock follows
+-- `minute_change` from the helper daemon (fired right on the minute); the
+-- routine polls the battery and is the clock's fallback.
+sbar.add("event", "minute_change")
+local events = sbar.add("item", "status", { drawing = false, updates = true, update_freq = 60 })
 
 -- Battery tooltip: hangs off a zero-width anchor at the right edge that is on
 -- every display (a popup of a single-display item lands off-screen: sketchybar
@@ -123,23 +126,10 @@ local function write_regions()
   regions.set("status", list)
 end
 
-local function show()
-  seq = seq + 1
-  local my = seq
-
-  -- one row (and tooltip) per distinct strip height
-  local strips, geos = {}, {}
-  for _, d in ipairs(displays) do
-    if not geos[d.geo.strip] then
-      geos[d.geo.strip] = d.geo
-      strips[#strips + 1] = d.geo.strip
-    end
-  end
-  if #strips == 0 then return end
-
-  local names, rows = { "input", "clock" }, {}
-  if state.has_battery then table.insert(names, 2, "battery") end
-  local d = os.date("%a ") .. tonumber(os.date("%d")) .. os.date(" %b")
+-- The row jobs (one per strip) showing time t.
+local function rows_at(t, strips, geos)
+  local rows = {}
+  local d = os.date("%a ", t) .. tonumber(os.date("%d", t)) .. os.date(" %b", t)
   for i, strip in ipairs(strips) do
     local geo = geos[strip]
     local input = render.base("island", palette)
@@ -157,7 +147,7 @@ local function show()
       text(d, font.medium, palette.muted),
       { type = "gap", w = 6 },
       -- widest digits reserve the width, so the island never changes minute to minute
-      text(os.date("%H:%M"), font.bold, palette.text, { min_text = "00:00", align = "right" }),
+      text(os.date("%H:%M", t), font.bold, palette.text, { min_text = "00:00", align = "right" }),
     }
 
     local parts = { input, clock }
@@ -167,8 +157,28 @@ local function show()
     rows[i] = render.row({ canvas_w = width_for(geo) / geo.scale, align = "right",
                            gap = config.island.gap / geo.scale, islands = parts }, geo)
   end
+  return rows
+end
 
-  render.run(rows, function(m)
+local function show()
+  seq = seq + 1
+  local my = seq
+
+  -- one row (and tooltip) per distinct strip height
+  local strips, geos = {}, {}
+  for _, d in ipairs(displays) do
+    if not geos[d.geo.strip] then
+      geos[d.geo.strip] = d.geo
+      strips[#strips + 1] = d.geo.strip
+    end
+  end
+  if #strips == 0 then return end
+
+  local names = { "input", "clock" }
+  if state.has_battery then table.insert(names, 2, "battery") end
+  local now = os.time()
+
+  render.run(rows_at(now, strips, geos), function(m)
     if my ~= seq then return end
     islands = {}
     for i, strip in ipairs(strips) do
@@ -187,6 +197,9 @@ local function show()
     end
     sbar.end_config()
     write_regions()
+
+    -- the next minute's image, so the minute change is a cached swap
+    render.run(rows_at((now // 60 + 1) * 60, strips, geos))
 
     -- tooltip for the current battery state (rendered ahead of any hover)
     if not state.has_battery then return end
@@ -246,11 +259,14 @@ end
 
 -- Events -----------------------------------------------------------------------
 
+events:subscribe("minute_change", tick)
+
 local ticks = 0
 events:subscribe("routine", function()
   ticks = ticks + 1
-  if ticks % 6 == 0 then update_battery() else tick() end
-  if ticks % 60 == 0 then render.gc(30 * 60) end -- every 10 minutes
+  tick()
+  update_battery()
+  if ticks % 10 == 0 then render.gc(30 * 60) end -- every 10 minutes
 end)
 events:subscribe({ "forced", "system_woke", "power_source_change" }, update_battery)
 

@@ -800,6 +800,24 @@ final class Daemon {
   }
 
   var parentWatch: DispatchSourceProcess?
+  var minuteTimer: Timer?
+
+  /// Fires `minute_change` right on every minute boundary (the clock), one
+  /// wakeup a minute. Timers don't follow the wall clock across sleep or a
+  /// clock change, so those re-align it.
+  func scheduleMinute() {
+    minuteTimer?.invalidate()
+    let now = Date().timeIntervalSince1970
+    let next = (floor(now / 60) + 1) * 60
+    // a hair past the boundary, so the new minute is what the bar reads
+    let t = Timer(fire: Date(timeIntervalSince1970: next + 0.005), interval: 0, repeats: false) { _ in
+      triggerAsync("minute_change", [:])
+      self.scheduleMinute()
+    }
+    t.tolerance = 0.005
+    RunLoop.main.add(t, forMode: .common)
+    minuteTimer = t
+  }
 
   /// Exit together with sketchybar (the daemon is detached via nohup, so it
   /// would otherwise keep capturing the wallpaper and spawning failing
@@ -830,7 +848,15 @@ final class Daemon {
       self.scheduleAccent()
       self.corners.refresh()
     }
-    ws.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in self.scheduleAccent(delay: 2) }
+    ws.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+      self.scheduleAccent(delay: 2)
+      self.scheduleMinute()
+      triggerAsync("minute_change", [:])
+    }
+    NotificationCenter.default.addObserver(forName: .NSSystemClockDidChange, object: nil, queue: .main) { _ in
+      self.scheduleMinute()
+      triggerAsync("minute_change", [:])
+    }
     ws.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { _ in self.scheduleAccent(delay: 2) }
     NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                            object: nil, queue: .main) { _ in
@@ -843,6 +869,7 @@ final class Daemon {
     // aerials drift slowly; re-sample now and then, only large changes are emitted
     Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in self.scheduleAccent() }
     emitLayout()
+    scheduleMinute()
     scheduleAccent(delay: 0.3, force: true)
     NSApplication.shared.setActivationPolicy(.prohibited)
     NSApplication.shared.run()

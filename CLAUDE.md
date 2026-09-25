@@ -70,6 +70,9 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
 - Accent: wallpaper hue via ScreenCaptureKit (aerial wallpapers have no file), tones in OKLCH
   (`lib/color.lua` `tone`), or custom (macOS accents / NSColorPanel). Also drives borders glow.
 - Text: SF Pro Text, optically centered on cap height by the helper. Battery tooltip wording = macOS menu.
+- Clock: the daemon fires `minute_change` on every minute boundary (one timer, re-aligned on wake /
+  clock change); the next minute's image is pre-rendered, so the swap is a cache hit. Measured on
+  screen: +55ms after :00. The 60s routine (battery) is the clock's fallback.
 
 ## How to verify visually (Screen Recording is granted to WezTerm)
 - `screencapture -x -R x,y,w,h out.png` / `-v -V secs out.mov`; ffmpeg `-fps_mode passthrough` → frames;
@@ -121,13 +124,11 @@ each live on some monitor), plus:
   Bar clicks behave like cmd-N.
 
 ## TODO (user, for 2026-09-26)
-1. Clock lags behind real time. Likely cause: `items/status.lua` checks the minute on a 10s
-   `routine` (up to ~10s late) + render latency; align the update to the minute boundary.
-2. F6 doesn't turn off the second monitor (there is an F6 rule in `~/.config/karabiner/karabiner.json`).
-3. Battery glyph: when the fill edge crosses the digits, they become unreadable (digits are knocked
+1. F6 doesn't turn off the second monitor (there is an F6 rule in `~/.config/karabiner/karabiner.json`).
+2. Battery glyph: when the fill edge crosses the digits, they become unreadable (digits are knocked
    out of the fill and solid over the empty part — see `drawBattery` in `helper/main.swift`).
-4. Performance review — run as a SEPARATE agent (Agent tool): bar render/refresh latency, helper
+3. Performance review — run as a SEPARATE agent (Agent tool): bar render/refresh latency, helper
    daemon CPU, AeroSpace switch timing, prerender volume with several displays.
-5. Bug test — run as a SEPARATE agent: exercise the multi-monitor spec end to end (cmd-N, cmd-alt-N,
+4. Bug test — run as a SEPARATE agent: exercise the multi-monitor spec end to end (cmd-N, cmd-alt-N,
    cmd-shift-N/h/l, clicks/hover per display, empty/new workspaces, display disconnect/reconnect),
    themes, battery tooltip; report findings before fixing.
