@@ -58,10 +58,10 @@ function M.palette()
   local white = 0xfff5f5f7
   return {
     accent = a,
-    island = color.tone(a, 0.22, 0.015, 0.88), -- near-neutral dark glass, hint of hue
+    island = color.tone(a, 0.30, 0.07, 0.90), -- dark tinted glass: lifts dark-theme app icons
     stroke = 0x17ffffff,
     pill   = color.tone(a, 0.58, 0.13),        -- the accent as a selection: vivid, white text reads
-    pill_idle = color.tone(a, 0.36, 0.06),     -- shown workspace on a display without focus
+    pill_idle = color.tone(a, 0.44, 0.08),     -- shown workspace on a display without focus
     hover  = color.alpha(white, 0.10),         -- hovered workspace: a quiet hint it's clickable
     popup  = color.tone(a, 0.25, 0.015, 0.96),
     glow   = color.tone(a, 0.80, 0.14),        -- window borders: bright against any wallpaper
