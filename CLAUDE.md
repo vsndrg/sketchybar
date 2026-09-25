@@ -34,6 +34,8 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   Also: showing a workspace re-homes it — so while its home monitor is disconnected, monitors.patch
   does NOT re-home it (user switches to 4/5 on main while iPad is off; they must still go back);
   a monitor that merely moved takes its workspaces along (rearrange remaps old point → new).
+  Explicit moves (move-workspace-to-monitor, summon from another monitor) always re-home, even
+  while the old home is missing (else a moved ex-iPad ws fell back to main once hidden).
   A workspace still SHOWN on main when its monitor returns must not stay there (showing it on a present
   monitor re-homes it): rearrange skips it, its monitor's stub picks it up. Happens after sleep: with no
   displays AeroSpace rearranges everything, main can come back showing the iPad's workspace.
