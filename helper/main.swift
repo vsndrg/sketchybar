@@ -556,7 +556,14 @@ func normalizeAccent(_ c: NSColor) -> String {
   return "0xffc9ced6"
 }
 
-func cursorX() -> CGFloat { NSEvent.mouseLocation.x }
+/// The bar is drawn on every display, so positions are relative to the screen
+/// under the cursor: returns (x from that screen's left edge, its width).
+func cursorOnScreen() -> (x: CGFloat, width: CGFloat) {
+  let p = NSEvent.mouseLocation
+  let screen = NSScreen.screens.first { NSMouseInRect(p, $0.frame, false) } ?? NSScreen.main
+  guard let f = screen?.frame else { return (p.x, 0) }
+  return (p.x - f.minX, f.width)
+}
 
 // MARK: - Keyboard layout
 
@@ -592,7 +599,9 @@ final class Daemon {
   var watcher: DispatchSourceFileSystemObject?
   let work = DispatchQueue(label: "accent")
 
-  // Hover regions of the bar, written by lua: "strip <height>" then "<name> <x0> <x1>".
+  // Hover regions of the bar, written by lua: "strip <height>" then
+  // "<name> <d0> <d1>" — distances from the right edge of a screen, so the
+  // same regions apply to the bar on every display.
   // Fixed-size items can't tell which island the cursor is over, so the daemon
   // does, and fires `bar_hover REGION=<name>` only when the region changes.
   let regionsPath = NSHomeDirectory() + "/.local/state/sketchybar/regions"
@@ -620,10 +629,11 @@ final class Daemon {
   func checkHover() {
     let p = NSEvent.mouseLocation
     var name = ""
-    if let screen = NSScreen.screens.first, NSMouseInRect(p, screen.frame, false), screen.frame.maxY - p.y <= strip {
+    if let screen = NSScreen.screens.first(where: { NSMouseInRect(p, $0.frame, false) }),
+       screen.frame.maxY - p.y <= strip {
       loadRegions()
-      let x = p.x - screen.frame.minX
-      name = regions.first { x >= $0.x0 && x < $0.x1 }?.name ?? ""
+      let fromRight = screen.frame.maxX - p.x
+      name = regions.first { fromRight > $0.x0 && fromRight <= $0.x1 }?.name ?? ""
     }
     guard name != hovered else { return }
     hovered = name
@@ -771,7 +781,9 @@ case "measure":
   for s in args.dropFirst(4) { print(String(format: "%.2f", textWidth(s, f))) }
 case "accent": print(accent())
 case "render": renderJobs(args.count > 1 ? args[1] : "[]")
-case "cursor": print(Int(cursorX()))
+case "cursor":
+  let c = cursorOnScreen()
+  print(Int(c.x), Int(c.width))
 case "layout": if args.count > 1, args[1] == "next" { nextLayout() } else { print(layoutCode()) }
 case "geometry":
   let s = NSScreen.screens.first { $0.auxiliaryTopLeftArea != nil } ?? NSScreen.main!

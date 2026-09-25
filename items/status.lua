@@ -8,7 +8,9 @@ local color = require("lib.color")
 
 local font = config.font
 local WIDTH = config.side_width.right
-local ORIGIN = config.screen.width - config.bar.margin - WIDTH -- global x of the item
+-- The item is right-aligned on every display: positions are measured from
+-- the right edge of the screen, which works on any display width.
+local RIGHT = config.bar.margin + WIDTH -- item's left edge, from the screen's right edge
 local palette = theme.palette()
 
 sbar.add("event", "layout_change")
@@ -71,7 +73,8 @@ local function write_regions()
   if not f then return end
   f:write(string.format("strip %d\n", config.bar.height))
   local b = islands.battery
-  if b then f:write(string.format("battery %g %g\n", ORIGIN + b.x0, ORIGIN + b.x1)) end
+  -- distances from the screen's right edge (see the helper's checkHover)
+  if b then f:write(string.format("battery %g %g\n", RIGHT - b.x1, RIGHT - b.x0)) end
   f:close()
 end
 
@@ -190,10 +193,12 @@ item:subscribe("mouse.clicked", function(env)
     sbar.exec("sketchybar --trigger theme_menu")
     return
   end
+  -- "<x on the screen under the cursor> <that screen's width>"
   sbar.exec("'" .. config.helper .. "' cursor", function(out)
-    local x = tonumber(tostring(out):match("%-?%d+"))
-    if not x then return end
-    x = x - ORIGIN
+    local x, w = tostring(out):match("^%s*(%-?%d+)%s+(%d+)")
+    x, w = tonumber(x), tonumber(w)
+    if not x or not w then return end
+    x = x - (w - RIGHT)
     local function inside(name) return islands[name] and x >= islands[name].x0 and x < islands[name].x1 end
     if inside("input") then
       sbar.exec("'" .. config.helper .. "' layout next")

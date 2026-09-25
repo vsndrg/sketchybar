@@ -139,8 +139,9 @@ item:subscribe("mouse.clicked", function(env)
     sbar.exec("sketchybar --trigger theme_menu")
     return
   end
+  -- "<x on the screen under the cursor> <that screen's width>"
   sbar.exec("'" .. config.helper .. "' cursor", function(out)
-    local x = tonumber(tostring(out):match("%-?%d+"))
+    local x = tonumber(tostring(out):match("^%s*(%-?%d+)"))
     if not x then return end
     x = x - config.bar.margin
     for _, r in ipairs(ranges) do
