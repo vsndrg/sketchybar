@@ -82,7 +82,9 @@ local last_borders = nil
 -- border. Inactive borders stay transparent: on a workspace switch aerospace
 -- moves every window at once and their borders visibly lag behind.
 local function apply_borders(a)
-  local args = string.format('active_color="glow(%s)" inactive_color=0x00000000 width=6.0 ax_focus=off', color.hex(a))
+  local args = string.format(
+    'active_color="glow(%s)" inactive_color=0x00000000 width=%.1f glow_radius=%.1f ax_focus=off',
+    color.hex(a), config.border.width, config.border.glow)
   if args == last_borders then return end
   last_borders = args
   local f = io.open(borders_file, "w")

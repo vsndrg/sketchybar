@@ -67,6 +67,7 @@ local function sync_displays()
         position = "left",
         display = x.arr,
         width = x.width,
+        y_offset = config.bar.y_offset,
         icon = { drawing = false },
         label = { drawing = false },
         background = { drawing = true, color = 0, image = { drawing = true, scale = config.image_scale } },

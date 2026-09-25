@@ -37,14 +37,20 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
 - AeroSpace forgets window→workspace on restart; `build.sh --install` snapshots and restores it.
 - AeroSpace build is signed with local cert `aerospace-local-codesign` (login keychain) so the Accessibility
   grant survives rebuilds. Build uses Command Line Tools (Xcode license not accepted).
-- borders runs from `~/.local/bin/borders` (brew agent disabled via `launchctl disable`).
+- borders runs from `~/.local/bin/borders` (brew agent disabled via `launchctl disable`), patched:
+  focus latency + `glow_radius=` option. `build.sh` builds offline from `~/.cache/borders-src`.
 - `sketchybarrc` runs `pkill -f 'barhelper daemon'`: never put that literal string in your own shell
   command during a reload (it kills your shell) — use `pgrep -f 'barhelpe[r] daemon'`.
 
 ## Design
-- Islands: squircle (SwiftUI continuous corners), h 26, r 8.5; inner pill h 20 r 5.5 (concentric).
-- Bar h 32 = notch strip; 10pt rhythm: margins 10, windows start at 39 (outer.top built-in 7 / others 39),
-  outer.bottom 9 (AeroSpace lays out 1pt short).
+- One gap G = 6 (`config.lua` `bar.gap`, derived geometry below it): screen edge → island → window →
+  window → edge, and between islands. Bar h 32 = notch strip; islands h 32 − G = 26 hang G from the top
+  and end flush with the strip (item y_offset −G/2). Windows start at 38 (outer.top built-in 6 / others
+  38), outer.bottom 5 (AeroSpace lays out 1pt short). aerospace.toml gaps must be changed by hand.
+  The user tried: G=10 (islands too thin, gap under bar too big), counting the border into the gap
+  (rejected) — keep gaps measured from the window.
+- Islands: squircle (SwiftUI continuous corners), r = h/3.056; inner pill h−6, concentric (inset 3).
+- Active border: `config.lua` `border = { width = 4, glow = 10 }` → `lib/theme.lua` → borders args.
 - Accent: wallpaper hue via ScreenCaptureKit (aerial wallpapers have no file), tones in OKLCH
   (`lib/color.lua` `tone`), or custom (macOS accents / NSColorPanel). Also drives borders glow.
 - Text: SF Pro Text, optically centered on cap height by the helper. Battery tooltip wording = macOS menu.
@@ -99,14 +105,13 @@ each live on some monitor), plus:
   Bar clicks behave like cmd-N.
 
 ## TODO (user, for 2026-09-26)
-1. Fix vertical symmetry: gaps between bar and windows and at the screen edges.
-2. Clock lags behind real time. Likely cause: `items/status.lua` checks the minute on a 10s
+1. Clock lags behind real time. Likely cause: `items/status.lua` checks the minute on a 10s
    `routine` (up to ~10s late) + render latency; align the update to the minute boundary.
-3. F6 doesn't turn off the second monitor (there is an F6 rule in `~/.config/karabiner/karabiner.json`).
-4. Battery glyph: when the fill edge crosses the digits, they become unreadable (digits are knocked
+2. F6 doesn't turn off the second monitor (there is an F6 rule in `~/.config/karabiner/karabiner.json`).
+3. Battery glyph: when the fill edge crosses the digits, they become unreadable (digits are knocked
    out of the fill and solid over the empty part — see `drawBattery` in `helper/main.swift`).
-5. Performance review — run as a SEPARATE agent (Agent tool): bar render/refresh latency, helper
+4. Performance review — run as a SEPARATE agent (Agent tool): bar render/refresh latency, helper
    daemon CPU, AeroSpace switch timing, prerender volume with several displays.
-6. Bug test — run as a SEPARATE agent: exercise the multi-monitor spec end to end (cmd-N, cmd-alt-N,
+5. Bug test — run as a SEPARATE agent: exercise the multi-monitor spec end to end (cmd-N, cmd-alt-N,
    cmd-shift-N/h/l, clicks/hover per display, empty/new workspaces, display disconnect/reconnect),
    themes, battery tooltip; report findings before fixing.

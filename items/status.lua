@@ -20,18 +20,19 @@ sbar.add("event", "layout_change")
 local anchor = sbar.add("item", "menu.anchor", {
   position = "right",
   width = 0,
-  popup = { align = "right", horizontal = true, height = config.popup.height, y_offset = 4 },
+  popup = { align = "right", horizontal = true, height = config.popup.height, y_offset = config.popup.offset },
 })
 
 local item = sbar.add("item", "status", {
   position = "right",
   width = WIDTH,
+  y_offset = config.bar.y_offset,
   updates = true,
   update_freq = 10,
   icon = { drawing = false },
   label = { drawing = false },
   background = { drawing = true, color = 0, image = { drawing = true, scale = config.image_scale } },
-  popup = { align = "right", horizontal = true, height = config.island.height, y_offset = 4 },
+  popup = { align = "right", horizontal = true, height = config.island.height, y_offset = config.popup.offset },
 })
 
 -- Battery tooltip: its canvas reaches from the bubble to the right edge, so a

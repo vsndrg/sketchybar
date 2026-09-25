@@ -8,18 +8,16 @@ local M = {
   cache  = home .. "/.cache/sketchybar",
   state  = home .. "/.local/state/sketchybar",
 
-  -- Bar fills the notch strip (safe area = 32pt on the 16" panel); side margin
-  -- matches aerospace outer gaps so islands line up with window edges.
-  bar    = { height = 32, margin = 10 },
-
-  -- Island radius = h / (2 * 1.528): the largest radius at which Apple's
-  -- continuous corner still fits without being clamped. Inner pills are
-  -- concentric: inset 3 → radius 8.5 - 3.
-  island = { height = 26, radius = 8.5, gap = 6, stroke = 1 },
-  pill   = { height = 20, radius = 5.5, inset = 3 },
-  popup  = { height = 34, radius = 11 },
-
-  app_icon_size = 18,
+  -- One gap everywhere (screen edge → island → window → window → edge, and
+  -- between islands). The bar fills the notch strip (safe area = 32pt on the
+  -- 16" panel); islands hang from the top edge by `gap` and end flush with the
+  -- strip, so they are 32 - gap tall. aerospace.toml gaps use the same number.
+  bar    = { height = 32, gap = 6 },
+  -- Active window border (JankyBorders, patched): half of `width` sticks out of
+  -- the window; `glow` is the blur radius of the glow around it.
+  border = { width = 4, glow = 10 },
+  -- popups (battery tooltip, theme menu) float this far below the islands
+  popup  = { height = 34, radius = 11, offset = 7 },
 
   font = {
     text   = "SF Pro Text",
@@ -32,6 +30,21 @@ local M = {
 
   anim = { curve = "tanh", frames = 14 },
 }
+
+-- Derived geometry. Island radius = h / (2 * 1.528): the largest radius at
+-- which Apple's continuous corner still fits without being clamped. Inner
+-- pills are concentric (inset 3). Items are centered in the bar, so they are
+-- shifted down by half the gap to sit flush with the bottom of the strip.
+do
+  local g = M.bar.gap
+  local h = M.bar.height - g
+  local r = math.floor(h / (2 * 1.528) * 4 + 0.5) / 4
+  M.bar.margin = g
+  M.bar.y_offset = -g / 2
+  M.island = { height = h, radius = r, gap = g, stroke = 1 }
+  M.pill = { height = h - 6, radius = r - 3, inset = 3 }
+  M.app_icon_size = h - 8
+end
 
 -- Main screen geometry (width of the areas left/right of the notch) and backing scale.
 local f = io.popen("'" .. M.helper .. "' geometry 2>/dev/null")
