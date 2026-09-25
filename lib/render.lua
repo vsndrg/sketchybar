@@ -6,11 +6,12 @@
 -- content swap of a single window — exactly one frame, nothing ever jumps.
 -- Images are content-addressed and cached.
 local config = require("config")
+local sh = require("lib.sh")
 
 local M = {}
 local dir = config.cache .. "/islands"
 -- leftovers of previous runs (this run's images are tracked by M.gc)
-os.execute("mkdir -p '" .. dir .. "' && find '" .. dir .. "' -name '*.png' -mmin +60 -delete 2>/dev/null")
+sh.run("mkdir -p '" .. dir .. "' && find '" .. dir .. "' -name '*.png' -mmin +60 -delete 2>/dev/null")
 
 -- Minimal JSON encoder (strings, numbers, booleans, arrays, objects).
 local function encode(v)

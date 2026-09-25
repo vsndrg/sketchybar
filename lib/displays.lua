@@ -6,6 +6,7 @@
 -- Each display gets its own bar strip: the bar, or less when its menu bar is
 -- lower (see config.strip).
 local config = require("config")
+local sh = require("lib.sh")
 
 local M = {}
 
@@ -15,18 +16,19 @@ local M = {}
 M.list = {}
 local subs = {}
 
--- Re-reads the displays; false when they can't be read right now.
-function M.sync()
+local screens_cmd = "'" .. config.helper .. "' screens 2>/dev/null"
+
+-- Takes the displays from `barhelper screens` output; false when they can't
+-- be read right now.
+local function parse(out)
   local screens = {}
-  local f = io.popen("'" .. config.helper .. "' screens 2>/dev/null")
-  for line in (f and f:read("*a") or ""):gmatch("[^\n]+") do
+  for line in (out or ""):gmatch("[^\n]+") do
     local idx, did, w, notch, mb, kind = line:match("^(%d+) (%d+) (%d+) (%d+) ?(%d*) ?(%a*)$")
     if idx then
       screens[tonumber(did)] = { mon = tonumber(idx), w = tonumber(w), notch = tonumber(notch),
                                  menu_bar = tonumber(mb) or 0, kind = kind ~= "" and kind or "display" }
     end
   end
-  if f then f:close() end
   local list = {}
   local q = sbar.query("displays")
   for _, x in ipairs(type(q) == "table" and q or {}) do
@@ -41,6 +43,14 @@ function M.sync()
   table.sort(list, function(a, b) return a.arr < b.arr end)
   M.list = list
   return true
+end
+
+-- Re-reads the displays, then cb(ok) (ok: M.list was updated). Async: event
+-- handlers must never block on a process (see lib/sh.lua).
+function M.sync(cb)
+  sbar.exec(screens_cmd, function(out)
+    cb(parse(type(out) == "string" and out or ""))
+  end)
 end
 
 -- fn() runs after every change of the display set (M.list is up to date).
@@ -60,8 +70,10 @@ local function settle_menu_bars()
     if d.menu_bar == 0 and retries < 5 then
       retries = retries + 1
       sbar.delay(1, function()
-        if M.sync() then notify() end
-        settle_menu_bars()
+        M.sync(function(ok)
+          if ok then notify() end
+          settle_menu_bars()
+        end)
       end)
       return
     end
@@ -76,15 +88,18 @@ events:subscribe("display_change", function()
   settling = true
   sbar.delay(0.5, function()
     settling = false
-    if M.sync() then
-      retries = 0
-      notify()
-      settle_menu_bars()
-    end
+    M.sync(function(ok)
+      if ok then
+        retries = 0
+        notify()
+        settle_menu_bars()
+      end
+    end)
   end)
 end)
 
-M.sync()
+-- at startup the items are built from the list right away
+parse(sh.run(screens_cmd))
 settle_menu_bars()
 
 return M

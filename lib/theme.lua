@@ -1,6 +1,7 @@
 -- Accent state: "auto" follows the wallpaper, "custom" is a fixed color.
 -- Every visual that depends on the accent subscribes via theme.on(fn).
 local config = require("config")
+local sh = require("lib.sh")
 local color = require("lib.color")
 
 local M = {
@@ -25,7 +26,7 @@ M.presets = {
 
 local state_file = config.state .. "/theme"
 local borders_file = config.state .. "/borders"
-os.execute("mkdir -p '" .. config.state .. "'")
+sh.run("mkdir -p '" .. config.state .. "'")
 
 local function load()
   local f = io.open(state_file, "r")

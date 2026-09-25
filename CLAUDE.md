@@ -55,6 +55,10 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   daemon's own window (`Tooltips`): Lua renders it per display and lists it in
   `~/.local/state/sketchybar/tooltips`, the daemon shows it on hover (no process spawn). The theme menu
   (right click) is still a sketchybar popup → appears on the focused display.
+- SbarLua ignores SIGCHLD except around its `os.execute` (default for system()): a `sbar.exec` child
+  exiting then stays a zombie, and with a zombie `io.popen`'s pclose can hang forever (XNU wait4) →
+  the whole bar froze. → No `os.execute` after `require("sketchybar")` (use `lib/sh.lua` at startup),
+  nothing blocking in event handlers (`sbar.exec` with a callback).
 - `sketchybarrc` runs `pkill -f 'barhelper daemon'`: never put that literal string in your own shell
   command during a reload (it kills your shell) — use `pgrep -f 'barhelpe[r] daemon'`.
 

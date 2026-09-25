@@ -1,10 +1,11 @@
 -- Squircle PNGs rendered by the helper (theme menu), cached by parameters.
 local config = require("config")
+local sh = require("lib.sh")
 local color = require("lib.color")
 
 local M = {}
 local dir = config.cache .. "/assets"
-os.execute("mkdir -p '" .. dir .. "' && find '" .. dir .. "' -name '*.png' -mtime +14 -delete 2>/dev/null")
+sh.run("mkdir -p '" .. dir .. "' && find '" .. dir .. "' -name '*.png' -mtime +14 -delete 2>/dev/null")
 
 local known = {}
 local function exists(path)

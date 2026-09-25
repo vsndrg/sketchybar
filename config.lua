@@ -74,9 +74,7 @@ function M.strip_height(menu_bar)
 end
 
 -- Main screen geometry (width of the areas left/right of the notch) and backing scale.
-local f = io.popen("'" .. M.helper .. "' geometry 2>/dev/null")
-local out = f and f:read("*a") or ""
-if f then f:close() end
+local out = require("lib.sh").run("'" .. M.helper .. "' geometry 2>/dev/null")
 M.geometry = out:gsub("%s+$", "") -- raw, to detect a real change of the main screen later
 local w, l, r, s = out:match("(%d+) (%d+) (%d+) ([%d%.]+)")
 M.screen = {

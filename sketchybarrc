@@ -12,6 +12,7 @@ sbar = require("sketchybar")
 local config = require("config")
 local theme = require("lib.theme")
 local frame = require("lib.frame")
+local sh = require("lib.sh")
 
 frame.hold()
 sbar.begin_config()
@@ -85,6 +86,6 @@ frame.release()
 theme.apply()
 
 -- The daemon fires layout_change / wallpaper_change / minute_change; start it once items exist.
-os.execute("pkill -f 'barhelper daemon' 2>/dev/null; (nohup '" .. config.helper .. "' daemon " .. config.screen_corner .. " >/dev/null 2>&1 &)")
+sh.run("pkill -f 'barhelper daemon' 2>/dev/null; (nohup '" .. config.helper .. "' daemon " .. config.screen_corner .. " >/dev/null 2>&1 &)")
 
 sbar.event_loop()
