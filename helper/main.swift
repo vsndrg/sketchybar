@@ -655,9 +655,16 @@ final class Daemon {
     triggerAsync("layout_change", ["LAYOUT": l])
   }
 
+  var pendingForce = false
+
   func scheduleAccent(delay: Double = 1.0, force: Bool = false) {
     pending?.cancel()
+    // a forced update (new wallpaper) survives being rescheduled by a
+    // non-forced one (e.g. a space change right after)
+    pendingForce = pendingForce || force
     let item = DispatchWorkItem {
+      let force = self.pendingForce
+      self.pendingForce = false
       self.work.async {
         let a = accent()
         DispatchQueue.main.async {
