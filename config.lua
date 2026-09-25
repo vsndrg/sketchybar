@@ -16,6 +16,10 @@ local M = {
   -- Active window border (JankyBorders, patched): half of `width` sticks out of
   -- the window; `glow` is the blur radius of the glow around it.
   border = { width = 4, glow = 10 },
+  -- The built-in panel's top corners are physically rounded; the helper
+  -- daemon masks the bottom ones to match with Apple's continuous corner of
+  -- this radius (the curve reaches ~1.53 r along each edge). 0 = off.
+  screen_corner = 21,
   -- popups (battery tooltip, theme menu) float this far below the islands
   popup  = { height = 34, radius = 11, offset = 7 },
 

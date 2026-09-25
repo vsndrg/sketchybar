@@ -623,6 +623,94 @@ func nextLayout() {
   TISSelectInputSource(list[(i + 1) % list.count])
 }
 
+// MARK: - Screen corners
+
+/// The built-in panel's top corners are physically rounded, the bottom ones
+/// are not: mask the bottom corners with black so all four match. Only the
+/// built-in display (CGDisplayIsBuiltin); rebuilt when screens change.
+// Private (SkyLight via CoreGraphics): the Spaces of every display, as the
+// Mission Control / AeroSpace see them.
+@_silgen_name("CGSMainConnectionID") func CGSMainConnectionID() -> Int32
+@_silgen_name("CGSCopyManagedDisplaySpaces") func CGSCopyManagedDisplaySpaces(_ cid: Int32) -> CFArray
+
+/// Whether the display currently shows a native fullscreen app's Space.
+func showsFullscreenSpace(_ id: CGDirectDisplayID) -> Bool {
+  guard let uuid = CGDisplayCreateUUIDFromDisplayID(id)?.takeRetainedValue(),
+        let str = CFUUIDCreateString(nil, uuid) as String?,
+        let list = CGSCopyManagedDisplaySpaces(CGSMainConnectionID()) as? [[String: Any]] else { return false }
+  let entry = list.first { ($0["Display Identifier"] as? String)?.caseInsensitiveCompare(str) == .orderedSame }
+    // with "Displays have separate Spaces" off there is one entry for all displays
+    ?? (list.count == 1 ? list.first : nil)
+  let current = entry?["Current Space"] as? [String: Any]
+  return (current?["type"] as? Int) == 4
+}
+
+final class Corners {
+  let radius: CGFloat
+  var windows: [NSWindow] = []
+  var display: CGDirectDisplayID = 0
+
+  /// radius of Apple's continuous corner (the curve reaches ~1.53 r along each edge)
+  init(radius: CGFloat) { self.radius = radius }
+
+  /// Black outside the continuous corner, rendered once: the window shows it as
+  /// static layer contents (no draw() calls, nothing to redraw).
+  func mask(_ s: CGFloat, scale: CGFloat, right: Bool) -> CGImage? {
+    let px = Int((s * scale).rounded())
+    guard let ctx = CGContext(data: nil, width: px, height: px, bitsPerComponent: 8, bytesPerRow: 0,
+                              space: CGColorSpaceCreateDeviceRGB(),
+                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+    ctx.scaleBy(x: scale, y: scale)
+    ctx.setFillColor(NSColor.black.cgColor)
+    ctx.fill(CGRect(x: 0, y: 0, width: s, height: s))
+    // a big rect whose bottom-left / bottom-right corner sits in this window
+    ctx.setBlendMode(.clear)
+    ctx.addPath(squircle(CGRect(x: right ? s - 4 * s : 0, y: 0, width: 4 * s, height: 4 * s), radius))
+    ctx.fillPath()
+    return ctx.makeImage()
+  }
+
+  func update() {
+    windows.forEach { $0.orderOut(nil) }
+    windows = []
+    display = 0
+    guard radius > 0,
+          let screen = NSScreen.screens.first(where: { CGDisplayIsBuiltin(displayID($0)) != 0 }) else { return }
+    display = displayID(screen)
+    let s = ceil(radius * 1.53) + 1
+    for right in [false, true] {
+      let f = screen.frame
+      let frame = NSRect(x: right ? f.maxX - s : f.minX, y: f.minY, width: s, height: s)
+      let w = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+      w.isOpaque = false
+      w.backgroundColor = .clear
+      w.hasShadow = false
+      w.ignoresMouseEvents = true
+      w.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.screenSaverWindow)))
+      w.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+      // like the physical top corners, keep them out of screenshots
+      w.sharingType = .none
+      let view = NSView(frame: NSRect(origin: .zero, size: frame.size))
+      view.wantsLayer = true
+      view.layerContentsRedrawPolicy = .never
+      view.layer?.contents = mask(s, scale: screen.backingScaleFactor, right: right)
+      view.layer?.contentsScale = screen.backingScaleFactor
+      w.contentView = view
+      windows.append(w)
+    }
+    refresh()
+  }
+
+  /// Hidden while the built-in display shows a fullscreen app (the corners
+  /// would sit on top of its content, and cost the fullscreen fast path).
+  func refresh() {
+    let hide = display != 0 && showsFullscreenSpace(display)
+    for w in windows {
+      if hide { w.orderOut(nil) } else { w.orderFrontRegardless() }
+    }
+  }
+}
+
 // MARK: - Daemon
 
 final class Daemon {
@@ -630,6 +718,10 @@ final class Daemon {
   var pending: DispatchWorkItem?
   var watcher: DispatchSourceFileSystemObject?
   let work = DispatchQueue(label: "accent")
+  let corners: Corners
+
+  /// cornerRadius: bottom corners of the built-in display (0 = off), see Corners
+  init(cornerRadius: CGFloat) { corners = Corners(radius: cornerRadius) }
 
   // Hover regions of the bar, written by lua: "strip <height>" then
   // "<name> <left|right> <d0> <d1>" — [d0, d1) measured from that edge of the
@@ -707,11 +799,18 @@ final class Daemon {
     dnc.addObserver(forName: NSNotification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String),
                     object: nil, queue: .main) { _ in self.emitLayout() }
     let ws = NSWorkspace.shared.notificationCenter
-    ws.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { _ in self.scheduleAccent() }
+    ws.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { _ in
+      self.scheduleAccent()
+      self.corners.refresh()
+    }
     ws.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in self.scheduleAccent(delay: 2) }
     ws.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { _ in self.scheduleAccent(delay: 2) }
     NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
-                                           object: nil, queue: .main) { _ in self.scheduleAccent() }
+                                           object: nil, queue: .main) { _ in
+      self.scheduleAccent()
+      self.corners.update()
+    }
+    corners.update()
     watchWallpaperStore()
     NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { _ in self.checkHover() }
     // aerials drift slowly; re-sample now and then, only large changes are emitted
@@ -807,7 +906,7 @@ final class Picker: NSObject {
 
 let args = Array(CommandLine.arguments.dropFirst())
 switch args.first {
-case "daemon": Daemon().run()
+case "daemon": Daemon(cornerRadius: CGFloat(args.count > 1 ? Double(args[1]) ?? 0 : 0)).run()
 case "shape":
   var rest = args.dropFirst()
   while rest.count >= 7 { shape(rest.prefix(7)); rest = rest.dropFirst(7) }

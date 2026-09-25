@@ -53,6 +53,11 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   (rejected) — keep gaps measured from the window.
 - Islands: squircle (SwiftUI continuous corners), r = h/3.056; inner pill h−6, concentric (inset 3).
 - Active border: `config.lua` `border = { width = 4, glow = 10 }` → `lib/theme.lua` → borders args.
+- Built-in display bottom corners are masked to match the physical top ones: helper daemon `Corners`
+  (`barhelper daemon <radius>`, `config.lua` `screen_corner`, user-tuned 21): Apple continuous corner,
+  rendered once into static layer contents (no redraws), hidden on a native fullscreen Space
+  (`CGSCopyManagedDisplaySpaces` type 4), `sharingType = .none` (not in screenshots — to check it
+  visually, build a copy with `.readOnly`).
 - Accent: wallpaper hue via ScreenCaptureKit (aerial wallpapers have no file), tones in OKLCH
   (`lib/color.lua` `tone`), or custom (macOS accents / NSColorPanel). Also drives borders glow.
 - Text: SF Pro Text, optically centered on cap height by the helper. Battery tooltip wording = macOS menu.
