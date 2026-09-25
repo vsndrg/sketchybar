@@ -69,7 +69,6 @@ Open issues:
   replace timeouts with confirmed ordering — per monitor only; place + confirm the top window before
   revealing lower accordion windows; hide old windows top-down only after the ones below are gone;
   timeouts only as ~1s liveness fallback; no waits for non-overlapping (tiles) layouts.
-- Performance review (separate agent) proposed, not run yet.
 - summon-workspace from an EMPTY workspace on another monitor once landed on the main monitor (focus
   snapped back to an app window there — AeroSpace native-focus race); not reproduced on retry.
 
@@ -106,3 +105,8 @@ each live on some monitor), plus:
 3. F6 doesn't turn off the second monitor (there is an F6 rule in `~/.config/karabiner/karabiner.json`).
 4. Battery glyph: when the fill edge crosses the digits, they become unreadable (digits are knocked
    out of the fill and solid over the empty part — see `drawBattery` in `helper/main.swift`).
+5. Performance review — run as a SEPARATE agent (Agent tool): bar render/refresh latency, helper
+   daemon CPU, AeroSpace switch timing, prerender volume with several displays.
+6. Bug test — run as a SEPARATE agent: exercise the multi-monitor spec end to end (cmd-N, cmd-alt-N,
+   cmd-shift-N/h/l, clicks/hover per display, empty/new workspaces, display disconnect/reconnect),
+   themes, battery tooltip; report findings before fixing.
