@@ -48,13 +48,14 @@ local state = {
 local islands = {} -- x ranges from the last render: input, battery, clock
 local seq = 0
 
+-- Wording and title case as in the macOS battery menu.
 local function status_text(level, charge, remaining)
   if charge == 1 then
-    return remaining and ("Charging · full in " .. remaining) or "Charging"
+    return remaining and (remaining .. " Until Full") or "Charging"
   elseif charge == 2 then
-    return level >= 100 and "Fully charged" or "On power · not charging"
+    return level >= 100 and "Fully Charged" or "Not Charging"
   end
-  return remaining and (remaining .. " remaining") or "Estimating time left…"
+  return remaining and (remaining .. " Remaining") or "Calculating Time Remaining…"
 end
 
 local function text(str, style, c, extra)
