@@ -10,7 +10,8 @@ local config = require("config")
 local M = {}
 
 -- { did, arr = arrangement id, mon = NSScreen index, w, notch = width left of
---   the notch (0 = none), menu_bar = menu bar height (0 = unknown), geo }
+--   the notch (0 = none), menu_bar = menu bar height (0 = unknown),
+--   kind = builtin | ipad | display, geo }
 M.list = {}
 local subs = {}
 
@@ -19,10 +20,10 @@ function M.sync()
   local screens = {}
   local f = io.popen("'" .. config.helper .. "' screens 2>/dev/null")
   for line in (f and f:read("*a") or ""):gmatch("[^\n]+") do
-    local idx, did, w, notch, mb = line:match("^(%d+) (%d+) (%d+) (%d+) ?(%d*)$")
+    local idx, did, w, notch, mb, kind = line:match("^(%d+) (%d+) (%d+) (%d+) ?(%d*) ?(%a*)$")
     if idx then
       screens[tonumber(did)] = { mon = tonumber(idx), w = tonumber(w), notch = tonumber(notch),
-                                 menu_bar = tonumber(mb) or 0 }
+                                 menu_bar = tonumber(mb) or 0, kind = kind ~= "" and kind or "display" }
     end
   end
   if f then f:close() end
@@ -33,7 +34,7 @@ function M.sync()
     local sc = screens[did]
     if sc then
       list[#list + 1] = { did = did, arr = x["arrangement-id"], mon = sc.mon, w = sc.w, notch = sc.notch,
-                          menu_bar = sc.menu_bar, geo = config.strip(config.strip_height(sc.menu_bar)) }
+                          menu_bar = sc.menu_bar, kind = sc.kind, geo = config.strip(config.strip_height(sc.menu_bar)) }
     end
   end
   if #list == 0 then return false end -- mid-reconfiguration: keep what we have

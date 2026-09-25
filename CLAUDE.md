@@ -25,7 +25,7 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   `sbar.query("displays")` → arrangement id (shared list: `lib/displays.lua`). Status (right) is also one
   item per display (`status.<did>`, same content), width capped
   (`config.status_max`); spaces width per display (`config.left_width`). sketchybarrc reloads only
-  when the MAIN screen geometry changes. Ranges identical on all displays (left-aligned).
+  when the MAIN screen geometry changes. Click/hover ranges per display (device glyphs differ).
 - AeroSpace: a hidden workspace remembers its monitor by the monitor's top-left point
   (`assignedMonitorPoint`); a missing monitor maps to the nearest one → reconnect returns them natively.
   BUT Sidecar disconnect makes its windows "die" briefly → AeroSpace's closed-windows cache
@@ -131,9 +131,12 @@ each live on some monitor), plus:
   them on main meanwhile (monitors.patch; see constraints). `build.sh --install` also snapshots
   and restores ws → monitor across the AeroSpace restart.
 - Bar: one bar per monitor, EVERY bar shows ALL existing workspaces (occupied + visible anywhere), so
-  the user never has to look around for a workspace; workspaces living on another monitor are marked
-  as foreign: digit + app icons dimmed as a whole (~40%), same numeric order, no separate group, no
-  pill even if visible there. Right side (status) identical on every monitor.
+  the user never has to look around for a workspace; workspaces living on another monitor carry that
+  monitor's device glyph (SF Symbol: laptopcomputer / ipad.landscape / display, from `barhelper screens`
+  col 6: CGDisplayIsBuiltin, Sidecar = vendor 'aapl' model 'iPad' FourCCs) between digit and icons,
+  same numeric order, no separate group, no pill even if visible there. Tried: dimming the whole
+  workspace to 40% (user: looks bad, meaning unclear — dimming reads as "disabled"); a superscript
+  badge (fine, user picked the slot). Right side (status) identical on every monitor.
   Focused-monitor indicator: visible ws pill is bright on the focused monitor, dimmed on the others;
   on the other monitors' bars the focused workspace (foreign there) gets a dashed accent outline.
   Bar clicks behave like cmd-N.

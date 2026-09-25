@@ -3,15 +3,16 @@
 --
 -- Workspaces live on monitors (the aerospace default). Each display has its
 -- own item: the workspace it shows gets the pill (vivid on the focused
--- display, idle on the others), workspaces living on another display are
--- dimmed as a whole — so any workspace can be found from any bar — and the
--- focused one, when it is on another display, gets a dashed outline.
+-- display, idle on the others), workspaces living on another display carry
+-- that display's device glyph (laptop, iPad, monitor) after the digit — so any
+-- workspace can be found from any bar, and it's clear where a click leads —
+-- and the focused one, when it is on another display, gets a dashed outline.
 --
 -- One fixed-width item (edge → notch, or → the status on displays without a
 -- notch) per display showing one image (see lib/render.lua): a workspace
 -- switch is a single content swap. Images for switching to every other
 -- visible workspace are pre-rendered, so switches hit the cache. The layout
--- is left-aligned, so click/hover ranges are identical on every display.
+-- is left-aligned; device glyphs differ per display, so do click/hover ranges.
 local config = require("config")
 local theme = require("lib.theme")
 local render = require("lib.render")
@@ -27,7 +28,7 @@ local palette = theme.palette()
 -- Displays ----------------------------------------------------------------------
 
 local MAIN = 1 -- NSScreen index of the main monitor: new workspaces open there
-local displays = {} -- { did, arr, mon, width, geo, item, hovered }
+local displays = {} -- { did, arr, mon, kind, width, geo, item, hovered, ranges }
 local by_did = {}
 local clicked -- mouse.clicked handler, defined below
 
@@ -55,7 +56,7 @@ local function sync_displays()
     elseif d.arr ~= x.arr or d.width ~= width or d.geo.strip ~= x.geo.strip then
       d.item:set({ display = x.arr, width = width, y_offset = x.geo.y_offset })
     end
-    d.arr, d.mon, d.width, d.geo = x.arr, x.mon, width, x.geo
+    d.arr, d.mon, d.kind, d.width, d.geo = x.arr, x.mon, x.kind, width, x.geo
     seen[x.did] = true
     now[#now + 1] = d
   end
@@ -73,12 +74,21 @@ end
 -- ws[n] = monitor (NSScreen index) workspace n lives on; shown[mon] = workspace
 -- that monitor shows; focused = focused workspace, on monitor focused_mon.
 local state = { ws = {}, shown = {}, focused = 0, focused_mon = MAIN, apps = {} }
-local ranges = {}
 local seq = 0
 local icon_theme = "" -- system icon theme, see icon_theme_change
 
 local function monitor_of(st, n)
   return st.ws[n] or MAIN
+end
+
+-- SF Symbol of each display kind (see lib/displays.lua)
+local device_symbol = { builtin = "laptopcomputer", ipad = "ipad.landscape", display = "display" }
+
+local function device_of(mon)
+  for _, d in ipairs(displays) do
+    if d.mon == mon then return device_symbol[d.kind] or device_symbol.display end
+  end
+  return device_symbol.display
 end
 
 -- The state right after `aerospace workspace n` (cmd-N / a click): n shows on
@@ -117,11 +127,13 @@ local function job_for(d, st, hovered)
   j.pill = color.hex(palette.pill)
   j.pill_idle = color.hex(palette.pill_idle)
   j.ring = color.hex(palette.pill)
+  j.ring_w = 1           -- dashed outline of the focused workspace seen from another display
   j.hover = color.hex(palette.hover)
   j.hover_fg = color.hex(palette.muted)
   j.fg = color.hex(palette.text)
   j.dim = color.hex(palette.dim)
-  j.foreign_alpha = 0.4
+  j.device_w = 16        -- device glyph width
+  j.device_slot = 18
   j.font = config.font.text
   j.style = config.font.bold
   j.size = config.font.size
@@ -129,13 +141,14 @@ local function job_for(d, st, hovered)
   j.icon_theme = icon_theme -- part of the cache key only: icons are baked in
   j.workspaces = {}
   for _, n in ipairs(existing(st)) do
-    local here = monitor_of(st, n) == d.mon
+    local mon = monitor_of(st, n)
+    local here = mon == d.mon
     local shown = here and st.shown[d.mon] == n
     table.insert(j.workspaces, {
       n = n,
       focused = shown or nil,
       idle = (shown and st.focused_mon ~= d.mon) or nil,
-      foreign = (not here) or nil,
+      device = (not here) and device_of(mon) or nil,
       -- the focused workspace lives on another display: outline it here
       ring = (not here and n == st.focused) or nil,
       -- hovered is ignored on the shown workspace, so that image is shared
@@ -171,7 +184,6 @@ local function show()
   for i, d in ipairs(displays) do jobs[i] = job_for(d, state, d.hovered) end
   render.run(jobs, function(m)
     if my ~= seq then return end
-    ranges = m[1].islands[1].ranges or {}
     sbar.begin_config()
     for i, d in ipairs(displays) do
       d.item:set({ background = { image = { string = m[i].out } } })
@@ -179,9 +191,10 @@ local function show()
     sbar.end_config()
     -- ranges are in the bar's units; scaled per display
     local list = {}
-    for _, d in ipairs(displays) do
+    for i, d in ipairs(displays) do
       local s = d.geo.scale
-      for _, r in ipairs(ranges) do
+      d.ranges = m[i].islands[1].ranges or {}
+      for _, r in ipairs(d.ranges) do
         list[#list + 1] = { "space." .. math.floor(r[1]), "left",
                             config.bar.margin + r[2] * s, config.bar.margin + r[3] * s, d.did }
       end
@@ -296,9 +309,10 @@ clicked = function(env)
     local x, did = tostring(out):match("^%s*(%-?%d+)%s+%d+%s*(%d*)")
     x = tonumber(x)
     if not x then return end
-    local d = by_did[tonumber(did)]
-    x = (x - config.bar.margin) / (d and d.geo.scale or 1)
-    for _, r in ipairs(ranges) do
+    local d = by_did[tonumber(did)] or displays[1]
+    if not (d and d.ranges) then return end
+    x = (x - config.bar.margin) / d.geo.scale
+    for _, r in ipairs(d.ranges) do
       if x >= r[2] and x < r[3] then
         if r[1] ~= state.focused then sbar.exec("aerospace workspace " .. math.floor(r[1])) end
         return

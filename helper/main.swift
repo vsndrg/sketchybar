@@ -339,6 +339,25 @@ func appIcon(_ bundle: String) -> NSImage {
   return img
 }
 
+var symbolCache: [String: NSImage] = [:]
+/// An SF Symbol `width` pt wide, tinted `color`.
+func symbolImage(_ name: String, _ width: CGFloat, _ color: CGColor) -> NSImage? {
+  let key = "\(name)|\(width)|\(color)"
+  if let i = symbolCache[key] { return i }
+  // point size ≈ 3/4 of the width: device symbols are wider than tall
+  guard let sym = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+    .withSymbolConfiguration(.init(pointSize: width * 0.75, weight: .semibold)),
+    let tint = NSColor(cgColor: color) else { return nil }
+  let img = NSImage(size: sym.size, flipped: false) { r in
+    sym.draw(in: r)
+    tint.set()
+    r.fill(using: .sourceAtop)
+    return true
+  }
+  symbolCache[key] = img
+  return img
+}
+
 /// NSImage.draw sets its own opacity (ignores the context alpha): pass it here.
 func drawIcon(_ ctx: CGContext, _ img: NSImage, _ rect: CGRect, alpha: CGFloat = 1) {
   NSGraphicsContext.saveGraphicsState()
@@ -381,18 +400,19 @@ func layoutSpaces(_ j: [String: Any]) -> Laid {
   let maxSlots = Int(num(j, "max_slots", 8))
   let wss = j["workspaces"] as? [[String: Any]] ?? []
 
-  let foreignAlpha = num(j, "foreign_alpha", 0.4)
+  let deviceW = num(j, "device_w"), deviceSlot = num(j, "device_slot")
 
   // focused: the workspace shown on this display (pill; "pill_idle" when the
-  // display isn't the focused one). foreign: lives on another display — the
-  // whole workspace (digit + icons) is dimmed. ring: the focused workspace,
-  // seen from another display — a dashed outline in the accent.
-  struct WS { let n: Int; let focused: Bool; let idle: Bool; let foreign: Bool; let ring: Bool; let hovered: Bool; let label: CTLine; let labelW: CGFloat; let apps: [String]; let overflow: Int; let w: CGFloat }
+  // display isn't the focused one). device: it lives on another display —
+  // that display's glyph (SF Symbol) sits between the digit and the icons.
+  // ring: the focused workspace, seen from another display — a dashed
+  // outline in the accent.
+  struct WS { let n: Int; let focused: Bool; let idle: Bool; let device: NSImage?; let ring: Bool; let hovered: Bool; let label: CTLine; let labelW: CGFloat; let apps: [String]; let overflow: Int; let w: CGFloat }
   var items: [WS] = []
   for ws in wss {
     let n = Int(num(ws, "n")), focused = (ws["focused"] as? Bool) ?? false
     let idle = focused && ((ws["idle"] as? Bool) ?? false)
-    let foreign = !focused && ((ws["foreign"] as? Bool) ?? false)
+    let device = focused ? nil : (ws["device"] as? String).flatMap { symbolImage($0, deviceW, col(j, "dim")) }
     let ring = !focused && ((ws["ring"] as? Bool) ?? false)
     let hovered = !focused && ((ws["hovered"] as? Bool) ?? false)
     let all = ws["apps"] as? [String] ?? []
@@ -401,8 +421,10 @@ func layoutSpaces(_ j: [String: Any]) -> Laid {
     let label = textLine("\(n)", f, col(j, focused ? "fg" : (hovered ? "hover_fg" : "dim")))
     let lw = ceil(lineWidth(label))
     let slots = CGFloat(shown.count + (overflow > 0 ? 1 : 0))
-    let w = slots > 0 ? pad + lw + numGap + slots * slot + tail : pad + lw + pad
-    items.append(WS(n: n, focused: focused, idle: idle, foreign: foreign, ring: ring, hovered: hovered, label: label, labelW: lw, apps: shown, overflow: overflow, w: w))
+    // an empty workspace ends with the glyph itself: pad after it, like after a digit
+    let w = slots > 0 ? pad + lw + numGap + (device == nil ? 0 : deviceSlot) + slots * slot + tail
+                      : pad + lw + (device == nil ? 0 : numGap + deviceW) + pad
+    items.append(WS(n: n, focused: focused, idle: idle, device: device, ring: ring, hovered: hovered, label: label, labelW: lw, apps: shown, overflow: overflow, w: w))
   }
   let width = items.reduce(inset) { $0 + $1.w + inset }
   var ranges: [[CGFloat]] = []
@@ -431,20 +453,21 @@ func layoutSpaces(_ j: [String: Any]) -> Laid {
         ctx.strokePath()
         ctx.restoreGState()
       }
-      ctx.saveGState()
-      if ws.foreign { ctx.setAlpha(foreignAlpha) }
       drawLine(ctx, ws.label, x: x + pad, mid: mid, f)
       var ix = x + pad + ws.labelW + numGap
+      if let g = ws.device {
+        let gh = deviceW * g.size.height / g.size.width
+        drawIcon(ctx, g, CGRect(x: ix, y: mid - gh / 2, width: deviceW, height: gh))
+        ix += deviceSlot
+      }
       for app in ws.apps {
-        drawIcon(ctx, appIcon(app), CGRect(x: ix + (slot - iconSize) / 2, y: (h - iconSize) / 2, width: iconSize, height: iconSize),
-                 alpha: ws.foreign ? foreignAlpha : 1)
+        drawIcon(ctx, appIcon(app), CGRect(x: ix + (slot - iconSize) / 2, y: (h - iconSize) / 2, width: iconSize, height: iconSize))
         ix += slot
       }
       if ws.overflow > 0 {
         let l = textLine("+\(ws.overflow)", small, col(j, "dim"))
         drawLine(ctx, l, x: ix + (slot - lineWidth(l)) / 2, mid: mid, small)
       }
-      ctx.restoreGState()
       x += ws.w + inset
     }
   }, ranges: ranges)
@@ -591,6 +614,15 @@ func normalizeAccent(_ c: NSColor) -> String {
 
 func displayID(_ s: NSScreen) -> CGDirectDisplayID {
   (s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+}
+
+/// What kind of device a display is: builtin, ipad (Sidecar reports vendor
+/// 'aapl' and model 'iPad' as FourCCs) or display. Names are localized, so
+/// they aren't used.
+func displayKind(_ id: CGDirectDisplayID) -> String {
+  if CGDisplayIsBuiltin(id) != 0 { return "builtin" }
+  if CGDisplayVendorNumber(id) == 0x6161_706C && CGDisplayModelNumber(id) == 0x6950_6164 { return "ipad" }
+  return "display"
 }
 
 /// Menu bar height of each display (0 = unknown). WindowServer keeps one
@@ -1205,10 +1237,11 @@ case "geometry":
   let r = s.auxiliaryTopRightArea?.width ?? w / 2
   print(Int(w), Int(l), Int(r), backing)
 case "screens":
-  // NSScreen index, CGDirectDisplayID, width, width left of the notch (0 = none), menu bar height
+  // NSScreen index, CGDirectDisplayID, width, width left of the notch (0 = none), menu bar height, kind
   let menuBars = menuBarHeights()
   for (i, s) in NSScreen.screens.enumerated() {
-    print(i + 1, displayID(s), Int(s.frame.width), Int(s.auxiliaryTopLeftArea?.width ?? 0), menuBars[displayID(s)] ?? 0)
+    print(i + 1, displayID(s), Int(s.frame.width), Int(s.auxiliaryTopLeftArea?.width ?? 0), menuBars[displayID(s)] ?? 0,
+          displayKind(displayID(s)))
   }
 case "pick": Picker().run(args.count > 1 ? args[1] : "0xff8ec8ff")
 case "sleep": SidecarSleep().run()
