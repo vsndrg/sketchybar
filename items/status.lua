@@ -151,6 +151,7 @@ local ticks = 0
 item:subscribe("routine", function()
   ticks = ticks + 1
   if ticks % 6 == 0 then update_battery() else tick() end
+  if ticks % 60 == 0 then render.gc(30 * 60) end -- every 10 minutes
 end)
 item:subscribe({ "forced", "system_woke", "power_source_change" }, update_battery)
 

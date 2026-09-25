@@ -9,7 +9,8 @@ local config = require("config")
 
 local M = {}
 local dir = config.cache .. "/islands"
-os.execute("mkdir -p '" .. dir .. "' && find '" .. dir .. "' -name '*.png' -mtime +1 -delete 2>/dev/null")
+-- leftovers of previous runs (this run's images are tracked by M.gc)
+os.execute("mkdir -p '" .. dir .. "' && find '" .. dir .. "' -name '*.png' -mmin +60 -delete 2>/dev/null")
 
 -- Minimal JSON encoder (strings, numbers, booleans, arrays, objects).
 local function encode(v)
@@ -49,6 +50,7 @@ local function fnv1a(s)
 end
 
 local meta = {} -- out path -> { width, ranges, out }
+local used = {} -- out path -> os.time() of last use
 
 local function exists(path)
   local f = io.open(path, "r")
@@ -70,6 +72,8 @@ function M.run(jobs, cb)
   for _, j in ipairs(jobs) do
     if not (meta[j.out] and exists(j.out)) then todo[#todo + 1] = j end
   end
+  local now = os.time()
+  for _, j in ipairs(jobs) do used[j.out] = now end
   local function done()
     if not cb then return end
     local out = {}
@@ -90,6 +94,21 @@ function M.run(jobs, cb)
     end
     done()
   end)
+end
+
+-- Every state is a new content-addressed PNG (the clock alone adds one per
+-- minute), so drop images that haven't been used for `max_age` seconds.
+-- Deleting one that is on screen is harmless: sketchybar keeps it in memory,
+-- and a later cache miss simply re-renders it.
+function M.gc(max_age)
+  local cutoff = os.time() - max_age
+  for path, t in pairs(used) do
+    if t < cutoff then
+      os.remove(path)
+      used[path] = nil
+      meta[path] = nil
+    end
+  end
 end
 
 -- A fixed-size canvas of islands (see helper renderRow).
