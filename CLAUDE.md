@@ -60,3 +60,4 @@ Open issues:
 2. Fix vertical symmetry: gaps between bar and windows and at the screen edges.
 3. Clock lags behind real time. Likely cause: `items/status.lua` checks the minute on a 10s
    `routine` (up to ~10s late) + render latency; align the update to the minute boundary.
+4. F6 doesn't turn off the second monitor (there is an F6 rule in `~/.config/karabiner/karabiner.json`).
