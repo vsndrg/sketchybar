@@ -38,12 +38,14 @@ local function encode(v)
   return "null"
 end
 
+-- 64-bit FNV-1a (Lua integers wrap at 64 bits): the cache holds thousands of
+-- images, where a 32-bit key would eventually collide and show a stale one.
 local function fnv1a(s)
-  local h = 2166136261
+  local h = -3750763034362895579 -- 0xcbf29ce484222325
   for i = 1, #s do
-    h = ((h ~ s:byte(i)) * 16777619) & 0xffffffff
+    h = (h ~ s:byte(i)) * 1099511628211 -- 0x100000001b3
   end
-  return string.format("%08x", h)
+  return string.format("%016x", h)
 end
 
 local meta = {} -- out path -> { width, ranges, out }
