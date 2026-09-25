@@ -21,6 +21,15 @@ import SwiftUI
 let sketchybar = FileManager.default.isExecutableFile(atPath: "/opt/homebrew/bin/sketchybar")
   ? "/opt/homebrew/bin/sketchybar" : "/usr/local/bin/sketchybar"
 
+/// All events go through one serial queue: sent in parallel, two events fired
+/// a few ms apart (hover in/out, EN→RU→EN) could arrive in the wrong order,
+/// and since the daemon only re-sends on change, the bar would stay wrong.
+let triggerQueue = DispatchQueue(label: "trigger")
+
+func triggerAsync(_ event: String, _ vars: [String: String]) {
+  triggerQueue.async { trigger(event, vars) }
+}
+
 func trigger(_ event: String, _ vars: [String: String]) {
   let p = Process()
   p.executableURL = URL(fileURLWithPath: sketchybar)
@@ -618,7 +627,7 @@ final class Daemon {
     }
     guard name != hovered else { return }
     hovered = name
-    DispatchQueue.global().async { trigger("bar_hover", ["REGION": name]) }
+    triggerAsync("bar_hover", ["REGION": name])
   }
 
   func run() {
@@ -643,7 +652,7 @@ final class Daemon {
 
   func emitLayout() {
     let l = layoutCode()
-    DispatchQueue.global().async { trigger("layout_change", ["LAYOUT": l]) }
+    triggerAsync("layout_change", ["LAYOUT": l])
   }
 
   func scheduleAccent(delay: Double = 1.0, force: Bool = false) {
@@ -654,7 +663,7 @@ final class Daemon {
         DispatchQueue.main.async {
           if force || self.lastAccent.isEmpty || colorDistance(a, self.lastAccent) > 36 {
             self.lastAccent = a
-            DispatchQueue.global().async { trigger("wallpaper_change", ["ACCENT": a]) }
+            triggerAsync("wallpaper_change", ["ACCENT": a])
           }
         }
       }
@@ -706,7 +715,7 @@ final class Picker: NSObject {
     last = hex(sender.color.withAlphaComponent(1))
     pending?.cancel()
     let c = last
-    let work = DispatchWorkItem { DispatchQueue.global().async { trigger("accent_preview", ["ACCENT": c]) } }
+    let work = DispatchWorkItem { triggerAsync("accent_preview", ["ACCENT": c]) }
     pending = work
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: work)
   }
