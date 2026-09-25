@@ -737,6 +737,78 @@ final class Corners {
   }
 }
 
+// MARK: - Tooltips
+
+/// Bar tooltips (the battery's) as the daemon's own window, shown on the
+/// display under the cursor — a sketchybar popup only appears on the display
+/// with the focused window. Lua renders the images and lists them in
+/// ~/.local/state/sketchybar/tooltips: "<region> <display> <right> <top> <png>"
+/// (the image's right edge / top edge in pt from the screen's right / top edge).
+/// Showing one on hover spawns nothing, so it appears with the hover itself.
+final class Tooltips {
+  let path = NSHomeDirectory() + "/.local/state/sketchybar/tooltips"
+  var entries: [String: (right: CGFloat, top: CGFloat, png: String)] = [:] // "<region> <display>"
+  var stamp: Date?
+  var window: NSWindow?
+  var shown = "" // key of the tooltip on screen
+
+  func load() -> Bool {
+    let st = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+    guard st != stamp else { return false }
+    stamp = st
+    entries = [:]
+    let text = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+    for line in text.split(separator: "\n") {
+      let f = line.split(separator: " ", maxSplits: 4)
+      guard f.count == 5, let r = Double(f[2]), let t = Double(f[3]) else { continue }
+      entries["\(f[0]) \(f[1])"] = (CGFloat(r), CGFloat(t), String(f[4]))
+    }
+    return true
+  }
+
+  /// Show the tooltip of `region` on `display` (CGDirectDisplayID), or hide.
+  func update(region: String, display: String) {
+    if region.isEmpty && shown.isEmpty { return } // the common case: every mouse move off the bar
+    let changed = load()
+    let key = "\(region) \(display)"
+    guard key != shown || changed else { return }
+    guard !region.isEmpty, let e = entries[key],
+          let screen = NSScreen.screens.first(where: { String(displayID($0)) == display }),
+          let img = NSImage(contentsOfFile: e.png)?.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+      window?.orderOut(nil)
+      shown = ""
+      return
+    }
+    // rendered at the backing scale (times the strip's scale), shown 1:1
+    let size = NSSize(width: CGFloat(img.width) / backing, height: CGFloat(img.height) / backing)
+    let f = screen.frame
+    let frame = NSRect(x: f.maxX - e.right - size.width, y: f.maxY - e.top - size.height,
+                       width: size.width, height: size.height)
+    let w = window ?? makeWindow()
+    w.setFrame(frame, display: false)
+    w.contentView?.layer?.contents = img
+    w.contentView?.layer?.contentsScale = backing
+    w.orderFrontRegardless()
+    window = w
+    shown = key
+  }
+
+  func makeWindow() -> NSWindow {
+    let w = NSWindow(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: false)
+    w.isOpaque = false
+    w.backgroundColor = .clear
+    w.hasShadow = false
+    w.ignoresMouseEvents = true
+    w.level = .popUpMenu
+    w.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+    let view = NSView()
+    view.wantsLayer = true
+    view.layerContentsRedrawPolicy = .never
+    w.contentView = view
+    return w
+  }
+}
+
 // MARK: - Daemon
 
 final class Daemon {
@@ -745,6 +817,7 @@ final class Daemon {
   var watcher: DispatchSourceFileSystemObject?
   let work = DispatchQueue(label: "accent")
   let corners: Corners
+  let tooltips = Tooltips()
 
   /// cornerRadius: bottom corners of the built-in display (0 = off), see Corners
   init(cornerRadius: CGFloat) { corners = Corners(radius: cornerRadius) }
@@ -792,6 +865,7 @@ final class Daemon {
       }?.name ?? ""
     }
     if name == "" { display = "" }
+    tooltips.update(region: name, display: display)
     guard name != hovered || display != hoveredDisplay else { return }
     hovered = name
     hoveredDisplay = display

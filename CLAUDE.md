@@ -43,8 +43,10 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   without a title bar, get the smallest radius other windows report instead of 9). `build.sh` builds
   offline from `~/.cache/borders-src`.
 - sketchybar shows a popup on the display with the FOCUSED window, anchored at the item's rect there:
-  a popup of a single-display item lands at -9999 elsewhere. Battery tooltip → zero-width all-display
-  anchor `status.anchor`, shown only when the hovered display = aerospace's focused monitor.
+  a popup of a single-display item lands at -9999 elsewhere. So the battery tooltip is the helper
+  daemon's own window (`Tooltips`): Lua renders it per display and lists it in
+  `~/.local/state/sketchybar/tooltips`, the daemon shows it on hover (no process spawn). The theme menu
+  (right click) is still a sketchybar popup → appears on the focused display.
 - `sketchybarrc` runs `pkill -f 'barhelper daemon'`: never put that literal string in your own shell
   command during a reload (it kills your shell) — use `pgrep -f 'barhelpe[r] daemon'`.
 

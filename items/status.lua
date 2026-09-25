@@ -33,23 +33,23 @@ local anchor = sbar.add("item", "menu.anchor", {
 sbar.add("event", "minute_change")
 local events = sbar.add("item", "status", { drawing = false, updates = true, update_freq = 60 })
 
--- Battery tooltip: hangs off a zero-width anchor at the right edge that is on
--- every display (a popup of a single-display item lands off-screen: sketchybar
--- positions popups by the item's rect on the last display). Its canvas reaches
--- from the bubble to the right edge, so a right-aligned popup puts the bubble
--- centered under the battery. Filled for the hovered display's strip.
-local tip_anchor = sbar.add("item", "status.anchor", {
-  position = "right",
-  width = 0,
-  popup = { align = "right", horizontal = true, height = config.island.height, y_offset = config.popup.offset },
-})
-local tip = sbar.add("item", "status.tip", {
-  position = "popup." .. tip_anchor.name,
-  icon = { drawing = false },
-  label = { drawing = false },
-  background = { drawing = true, color = 0, image = { drawing = true, scale = config.image_scale } },
-})
-local tips = {} -- strip -> tooltip render meta
+-- Battery tooltip: drawn by the helper daemon on the display under the cursor
+-- (a sketchybar popup only shows on the display with the focused window).
+-- Its canvas reaches from the bubble to the item's right edge, so the bubble
+-- is centered under the battery; listed per display for the daemon.
+local tips_path = config.state .. "/tooltips"
+local tips_written
+
+local function write_tips(lines)
+  local text = table.concat(lines, "\n") .. "\n"
+  if text == tips_written then return end
+  local f = io.open(tips_path .. ".tmp", "w")
+  if not f then return end
+  f:write(text)
+  f:close()
+  os.rename(tips_path .. ".tmp", tips_path)
+  tips_written = text
+end
 
 local clicked -- mouse.clicked handler, defined below
 local by_did = {} -- did -> { item, geo }
@@ -202,7 +202,7 @@ local function show()
     render.run(rows_at((now // 60 + 1) * 60, strips, geos))
 
     -- tooltip for the current battery state (rendered ahead of any hover)
-    if not state.has_battery then return end
+    if not state.has_battery then return write_tips({}) end
     local jobs = {}
     for i, strip in ipairs(strips) do
       local b = islands[strip].battery
@@ -215,8 +215,15 @@ local function show()
     end
     render.run(jobs, function(tm)
       if my ~= seq then return end
-      tips = {}
-      for i, strip in ipairs(strips) do tips[strip] = tm[i] end
+      local by_strip, lines = {}, {}
+      for i, strip in ipairs(strips) do by_strip[strip] = tm[i].out end
+      for _, x in ipairs(displays) do
+        -- "<region> <display> <right> <top> <png>": right edge at the item's,
+        -- top config.popup.offset below the islands (the strip's bottom)
+        lines[#lines + 1] = string.format("battery %d %g %g %s", x.did, config.bar.margin,
+          x.geo.strip + config.popup.offset, by_strip[x.geo.strip])
+      end
+      write_tips(lines)
     end)
   end)
 end
@@ -275,36 +282,6 @@ events:subscribe("layout_change", function(env)
     state.code = env.LAYOUT
     show()
   end
-end)
-
--- sketchybar shows popups on the display with the focused window, whatever
--- display the anchor is hovered on: show the tooltip only when those match
--- (aerospace's focused monitor), else it would pop up on another display.
-local hover_seq = 0
-events:subscribe("bar_hover", function(env)
-  hover_seq = hover_seq + 1
-  local my = hover_seq
-  local d = by_did[tonumber(env.DISPLAY)]
-  local t = d and tips[d.geo.strip]
-  if env.REGION ~= "battery" or not state.has_battery or not t then
-    tip_anchor:set({ popup = { drawing = false } })
-    return
-  end
-  sbar.exec("aerospace list-monitors --focused --format '%{monitor-appkit-nsscreen-screens-id}'", function(out)
-    if my ~= hover_seq then return end
-    if tonumber(tostring(out):match("%d+")) ~= d.mon then
-      tip_anchor:set({ popup = { drawing = false } })
-      return
-    end
-    local sc = d.geo.scale
-    tip:set({ width = math.ceil(t.width * sc), background = { image = { string = t.out } } })
-    tip_anchor:set({ popup = {
-      drawing = true,
-      height = math.floor(config.island.height * sc + 0.5),
-      -- popups hang below the bar: lift them where the strip is shorter
-      y_offset = config.popup.offset - (config.bar.height - d.geo.strip),
-    } })
-  end)
 end)
 
 clicked = function(env)
