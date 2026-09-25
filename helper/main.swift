@@ -48,15 +48,18 @@ func hex(_ c: NSColor) -> String {
 let backing: CGFloat = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
 
 func render(_ w: CGFloat, _ h: CGFloat, to out: String, _ draw: (CGContext) -> Void) {
-  let cs = CGColorSpace(name: CGColorSpace.sRGB)!
-  let ctx = CGContext(data: nil, width: Int((w * backing).rounded()), height: Int((h * backing).rounded()),
-                      bitsPerComponent: 8, bytesPerRow: 0, space: cs,
-                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+  // an empty/invalid size renders nothing; the caller keeps its previous image
+  guard w.isFinite, h.isFinite, w >= 1, h >= 1,
+        let cs = CGColorSpace(name: CGColorSpace.sRGB),
+        let ctx = CGContext(data: nil, width: Int((w * backing).rounded()), height: Int((h * backing).rounded()),
+                            bitsPerComponent: 8, bytesPerRow: 0, space: cs,
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
   ctx.scaleBy(x: backing, y: backing)
   ctx.setShouldAntialias(true)
   ctx.interpolationQuality = .high
   draw(ctx)
-  let rep = NSBitmapImageRep(cgImage: ctx.makeImage()!)
+  guard let image = ctx.makeImage() else { return }
+  let rep = NSBitmapImageRep(cgImage: image)
   let tmp = out + ".\(getpid()).tmp"
   try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: tmp))
   // atomic swap so sketchybar never reads a half-written file
@@ -489,11 +492,15 @@ func renderJobs(_ json: String) {
   var out: [[String: Any]] = []
   for j in jobs {
     var meta = renderRow(j)
-    meta["out"] = str(j, "out")
+    let path = str(j, "out")
+    guard FileManager.default.fileExists(atPath: path) else { continue } // nothing rendered
+    meta["out"] = path
     out.append(meta)
   }
-  let d = try! JSONSerialization.data(withJSONObject: out)
-  print(String(data: d, encoding: .utf8)!)
+  guard let d = try? JSONSerialization.data(withJSONObject: out), let text = String(data: d, encoding: .utf8) else {
+    print("[]"); return
+  }
+  print(text)
 }
 
 // MARK: - OKLCH (perceptual accent normalization)
