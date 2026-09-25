@@ -57,14 +57,25 @@ require("items.spaces")
 local status = require("items.status")
 require("items.theme_menu")(status.anchor)
 
--- Geometry (notch, narrowest display) is read at startup: re-read it when
--- displays come and go.
+-- Geometry (notch, narrowest display) is read at startup. display_change also
+-- fires without any real change (on reloads, Sidecar reconnects), so reload
+-- only when the geometry actually differs — otherwise the bar reload-loops.
 local displays = sbar.add("item", "displays.watcher", { drawing = false, updates = true })
-local reload_pending = false
+local geometry_now = config.geometry
+local checking = false
 displays:subscribe("display_change", function()
-  if reload_pending then return end
-  reload_pending = true
-  sbar.delay(1.0, function() sbar.exec("sketchybar --reload") end)
+  if checking then return end
+  checking = true
+  sbar.delay(1.0, function()
+    sbar.exec("'" .. config.helper .. "' geometry", function(out)
+      checking = false
+      local g = type(out) == "string" and out:gsub("%s+$", "") or ""
+      if g ~= "" and g ~= geometry_now then
+        geometry_now = g
+        sbar.exec("sketchybar --reload")
+      end
+    end)
+  end)
 end)
 
 sbar.end_config()
