@@ -61,3 +61,5 @@ Open issues:
 3. Clock lags behind real time. Likely cause: `items/status.lua` checks the minute on a 10s
    `routine` (up to ~10s late) + render latency; align the update to the minute boundary.
 4. F6 doesn't turn off the second monitor (there is an F6 rule in `~/.config/karabiner/karabiner.json`).
+5. Battery glyph: when the fill edge crosses the digits, they become unreadable (digits are knocked
+   out of the fill and solid over the empty part — see `drawBattery` in `helper/main.swift`).
