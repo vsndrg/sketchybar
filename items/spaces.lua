@@ -75,6 +75,7 @@ end
 local state = { ws = {}, shown = {}, focused = 0, focused_mon = MAIN, apps = {} }
 local ranges = {}
 local seq = 0
+local icon_theme = "" -- system icon theme, see icon_theme_change
 
 local function monitor_of(st, n)
   return st.ws[n] or MAIN
@@ -125,6 +126,7 @@ local function job_for(d, st, hovered)
   j.style = config.font.bold
   j.size = config.font.size
   j.max_slots = 8
+  j.icon_theme = icon_theme -- part of the cache key only: icons are baked in
   j.workspaces = {}
   for _, n in ipairs(existing(st)) do
     local here = monitor_of(st, n) == d.mon
@@ -258,6 +260,13 @@ events:subscribe("aerospace_workspace_change", function(env)
   refresh()
 end)
 events:subscribe({ "aerospace_focus_change", "space_windows_change", "front_app_switched", "system_woke" }, refresh)
+
+-- System icon theme changed (helper daemon): every cached image is stale.
+sbar.add("event", "icon_theme_change")
+events:subscribe("icon_theme_change", function(env)
+  icon_theme = env.THEME or ""
+  show()
+end)
 
 sbar.add("event", "bar_hover")
 events:subscribe("bar_hover", function(env)

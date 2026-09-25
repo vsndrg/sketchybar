@@ -817,6 +817,8 @@ final class Daemon {
   var lastAccent = ""
   var pending: DispatchWorkItem?
   var watcher: DispatchSourceFileSystemObject?
+  var prefsWatcher: DispatchSourceFileSystemObject?
+  var iconTheme = Daemon.iconTheme()
   let work = DispatchQueue(label: "accent")
   let corners: Corners
   let tooltips = Tooltips()
@@ -941,6 +943,7 @@ final class Daemon {
     }
     corners.update()
     watchWallpaperStore()
+    watchIconTheme()
     NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { _ in self.checkHover() }
     // aerials drift slowly; re-sample now and then, only large changes are emitted
     Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in self.scheduleAccent() }
@@ -990,6 +993,33 @@ final class Daemon {
     src.setCancelHandler { close(fd) }
     src.resume()
     watcher = src
+  }
+
+  /// System Settings → Appearance → Icons (default / dark / clear / tinted) only
+  /// changes global preferences; AppKit's own notification doesn't reach other
+  /// processes. The bar's app icons are baked into cached images, so tell lua.
+  static func iconTheme() -> String {
+    let keys = ["AppleIconAppearanceTheme", "AppleIconAppearanceTintColor"]
+    return keys.map { k in
+      CFPreferencesCopyAppValue(k as CFString, kCFPreferencesAnyApplication).map { "\($0)" } ?? "-"
+    }.joined(separator: "|").filter { $0.isLetter || $0.isNumber || $0 == "|" || $0 == "." || $0 == "-" }
+  }
+
+  // cfprefsd replaces .GlobalPreferences.plist (a directory write) within a
+  // second or two of the change.
+  func watchIconTheme() {
+    let fd = open(NSHomeDirectory() + "/Library/Preferences", O_EVTONLY)
+    guard fd >= 0 else { return }
+    let src = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write], queue: .main)
+    src.setEventHandler {
+      let t = Daemon.iconTheme()
+      guard t != self.iconTheme else { return }
+      self.iconTheme = t
+      triggerAsync("icon_theme_change", ["THEME": t])
+    }
+    src.setCancelHandler { close(fd) }
+    src.resume()
+    prefsWatcher = src
   }
 }
 
