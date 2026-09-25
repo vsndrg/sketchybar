@@ -14,9 +14,11 @@
 //   barhelper render JSON                         whole islands as single images, prints JSON meta
 //   barhelper cursor                              global cursor x
 //   barhelper pick 0xAARRGGBB                     native color panel, live preview, prints result
+//   barhelper sleep                               end Sidecar sessions, then sleep the system (F6 in Karabiner)
 
 import AppKit
 import Carbon
+import IOKit.pwr_mgt
 import ScreenCaptureKit
 import SwiftUI
 
@@ -1030,6 +1032,118 @@ final class Picker: NSObject {
   }
 }
 
+// MARK: - Sleep
+
+/// A Sidecar session keeps the iPad lit while the Mac sleeps, so end it first
+/// (private SidecarCore, as the Control Center display menu does), then sleep.
+/// The process stays alive through the sleep and connects the same devices
+/// again after wake, once the screen is unlocked (the lock screen isn't worth
+/// mirroring). Log: ~/.local/state/sketchybar/sleep.log.
+final class SidecarSleep {
+  typealias Completion = @convention(block) (NSError?) -> Void
+  typealias Call = @convention(c) (NSObject, Selector, NSObject, @escaping Completion) -> Void
+
+  let manager: NSObject? = {
+    guard dlopen("/System/Library/PrivateFrameworks/SidecarCore.framework/SidecarCore", RTLD_NOW) != nil,
+          let cls = NSClassFromString("SidecarDisplayManager") as? NSObject.Type else { return nil }
+    return cls.perform(NSSelectorFromString("sharedManager"))?.takeUnretainedValue() as? NSObject
+  }()
+  let logPath = NSHomeDirectory() + "/.local/state/sketchybar/sleep.log"
+  var ids: [String] = []  // devices this run disconnected, reconnected after wake
+  var requested = false, asleep = false, woke = false, reconnecting = false, attempts = 0
+
+  func log(_ s: String) {
+    let line = "\(Date()) \(s)\n"
+    if let h = FileHandle(forWritingAtPath: logPath) { h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); h.closeFile() }
+  }
+
+  func devices(_ key: String) -> [NSObject] { manager?.value(forKey: key) as? [NSObject] ?? [] }
+  func id(_ d: NSObject) -> String { (d.value(forKey: "identifier") as? UUID)?.uuidString ?? "" }
+
+  func call(_ name: String, _ device: NSObject, _ done: @escaping (NSError?) -> Void) {
+    guard let m = manager else { return }
+    let sel = NSSelectorFromString(name)
+    let f = unsafeBitCast(m.method(for: sel), to: Call.self)
+    f(m, sel, device) { e in DispatchQueue.main.async { done(e) } }
+  }
+
+  func run() {
+    signal(SIGHUP, SIG_IGN)
+    setsid()  // outlive the shell Karabiner runs us from
+    FileManager.default.createFile(atPath: logPath, contents: nil)
+    let connected = devices("connectedDevices")
+    ids = connected.map(id)
+    log("sidecar connected: \(ids)")
+    if connected.isEmpty { sleepNow(); exit(0) }
+
+    let ws = NSWorkspace.shared.notificationCenter
+    ws.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
+      self.asleep = true; self.log("will sleep")
+    }
+    ws.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+      self.log("did wake"); self.afterWake()
+    }
+    DistributedNotificationCenter.default().addObserver(
+      forName: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main
+    ) { _ in self.log("unlocked"); if self.woke && !self.reconnecting { self.reconnect() } }
+
+    var left = connected.count
+    for d in connected {
+      call("disconnectFromDevice:completion:", d) { e in
+        self.log("disconnected \(self.id(d)) \(e?.localizedDescription ?? "ok")")
+        left -= 1
+        if left == 0 { self.sleepNow() }
+      }
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self.sleepNow() }  // Sidecar didn't answer
+    RunLoop.main.run()
+  }
+
+  func sleepNow() {
+    guard !requested else { return }
+    requested = true
+    log("sleep")
+    let pm = IOPMFindPowerManagement(mach_port_t(MACH_PORT_NULL))
+    IOPMSleepSystem(pm)
+    IOServiceClose(pm)
+    // sleep refused (no willSleep) → give the iPad back right away
+    DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
+      if !self.asleep { self.log("sleep didn't happen"); self.afterWake() }
+    }
+  }
+
+  func afterWake() {
+    guard !woke else { return }
+    woke = true
+    let session = CGSessionCopyCurrentDictionary() as? [String: Any]
+    if session?["CGSSessionScreenIsLocked"] as? Bool == true { log("locked, waiting for unlock"); return }
+    reconnect()
+  }
+
+  /// The iPad may need a few seconds after wake to show up; retry for about a minute.
+  func reconnect() {
+    reconnecting = true
+    let have = Set(devices("connectedDevices").map(id))
+    let want = ids.filter { !have.contains($0) }
+    if want.isEmpty { log("all connected"); exit(0) }
+    attempts += 1
+    if attempts > 20 { log("giving up on \(want)"); exit(1) }
+    let available = devices("devices")
+    var left = want.count
+    for i in want {
+      let finish = {
+        left -= 1
+        if left == 0 { DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self.reconnect() } }
+      }
+      guard let d = available.first(where: { self.id($0) == i }) else { log("\(i) not available yet"); finish(); continue }
+      call("connectToDevice:completion:", d) { e in
+        self.log("connect \(i) \(e?.localizedDescription ?? "ok")")
+        finish()
+      }
+    }
+  }
+}
+
 // MARK: - Entry
 
 let args = Array(CommandLine.arguments.dropFirst())
@@ -1067,7 +1181,8 @@ case "screens":
     print(i + 1, displayID(s), Int(s.frame.width), Int(s.auxiliaryTopLeftArea?.width ?? 0), menuBars[displayID(s)] ?? 0)
   }
 case "pick": Picker().run(args.count > 1 ? args[1] : "0xff8ec8ff")
+case "sleep": SidecarSleep().run()
 default:
-  FileHandle.standardError.write("usage: barhelper daemon|shape|icon|battery|measure|accent|layout|geometry|screens|render|cursor|pick\n".data(using: .utf8)!)
+  FileHandle.standardError.write("usage: barhelper daemon|shape|icon|battery|measure|accent|layout|geometry|screens|render|cursor|pick|sleep\n".data(using: .utf8)!)
   exit(1)
 }

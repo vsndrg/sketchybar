@@ -34,6 +34,12 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   Also: showing a workspace re-homes it — so while its home monitor is disconnected, monitors.patch
   does NOT re-home it (user switches to 4/5 on main while iPad is off; they must still go back);
   a monitor that merely moved takes its workspaces along (rearrange remaps old point → new).
+  A workspace still SHOWN on main when its monitor returns must not stay there (showing it on a present
+  monitor re-homes it): rearrange skips it, its monitor's stub picks it up. Happens after sleep: with no
+  displays AeroSpace rearranges everything, main can come back showing the iPad's workspace.
+- F6 (Karabiner `fn_function_keys`) → `barhelper sleep`: ends Sidecar sessions (private SidecarCore
+  `SidecarDisplayManager`, else the iPad stays lit), sleeps, stays alive and reconnects the same
+  devices after wake + unlock. Log: `~/.local/state/sketchybar/sleep.log`.
 - AeroSpace moves windows via AX, per app, async; no atomic switch possible without SIP. Patches reorder/wait.
 - AeroSpace forgets window→workspace on restart; `build.sh --install` snapshots and restores it.
 - AeroSpace build is signed with local cert `aerospace-local-codesign` (login keychain) so the Accessibility
@@ -126,7 +132,7 @@ each live on some monitor), plus:
   Bar clicks behave like cmd-N.
 
 ## TODO (user, for 2026-09-26)
-1. F6 doesn't turn off the second monitor (there is an F6 rule in `~/.config/karabiner/karabiner.json`).
+1. (done 2026-09-26) F6 doesn't turn off the second monitor.
 2. Battery glyph: when the fill edge crosses the digits, they become unreadable (digits are knocked
    out of the fill and solid over the empty part — see `drawBattery` in `helper/main.swift`).
 3. Performance review — run as a SEPARATE agent (Agent tool): bar render/refresh latency, helper
