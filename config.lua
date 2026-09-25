@@ -34,7 +34,7 @@ local M = {
 }
 
 -- Screen geometry (width of the areas left/right of the notch) and backing scale.
-local f = io.popen(M.helper .. " geometry 2>/dev/null")
+local f = io.popen("'" .. M.helper .. "' geometry 2>/dev/null")
 local out = f and f:read("*a") or ""
 if f then f:close() end
 local w, l, r, s = out:match("(%d+) (%d+) (%d+) ([%d%.]+)")
