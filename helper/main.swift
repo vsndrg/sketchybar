@@ -8,7 +8,7 @@
 //   barhelper measure FAMILY STYLE SIZE TEXT...   text widths in points, one per line
 //   barhelper accent                              print wallpaper accent (0xAARRGGBB)
 //   barhelper layout [next]                       print / switch keyboard layout
-//   barhelper geometry                            "<screen_w> <left_of_notch_w> <right_of_notch_w> <scale>"
+//   barhelper geometry                            "<screen_w> <left_of_notch_w> <right_of_notch_w> <scale> <narrowest_screen_w>"
 //   barhelper render JSON                         whole islands as single images, prints JSON meta
 //   barhelper cursor                              global cursor x
 //   barhelper pick 0xAARRGGBB                     native color panel, live preview, prints result
@@ -794,7 +794,8 @@ case "geometry":
   let w = s.frame.width
   let l = s.auxiliaryTopLeftArea?.width ?? w / 2
   let r = s.auxiliaryTopRightArea?.width ?? w / 2
-  print(Int(w), Int(l), Int(r), backing)
+  let narrowest = NSScreen.screens.map(\.frame.width).min() ?? w
+  print(Int(w), Int(l), Int(r), backing, Int(narrowest))
 case "pick": Picker().run(args.count > 1 ? args[1] : "0xff8ec8ff")
 default:
   FileHandle.standardError.write("usage: barhelper daemon|shape|icon|battery|measure|accent|layout|geometry|pick\n".data(using: .utf8)!)

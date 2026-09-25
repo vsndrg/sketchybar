@@ -57,6 +57,16 @@ require("items.spaces")
 local status = require("items.status")
 require("items.theme_menu")(status.anchor)
 
+-- Geometry (notch, narrowest display) is read at startup: re-read it when
+-- displays come and go.
+local displays = sbar.add("item", "displays.watcher", { drawing = false, updates = true })
+local reload_pending = false
+displays:subscribe("display_change", function()
+  if reload_pending then return end
+  reload_pending = true
+  sbar.delay(1.0, function() sbar.exec("sketchybar --reload") end)
+end)
+
 sbar.end_config()
 frame.release()
 

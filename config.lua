@@ -37,22 +37,26 @@ local M = {
 local f = io.popen("'" .. M.helper .. "' geometry 2>/dev/null")
 local out = f and f:read("*a") or ""
 if f then f:close() end
-local w, l, r, s = out:match("(%d+) (%d+) (%d+) ([%d%.]+)")
+local w, l, r, s, n = out:match("(%d+) (%d+) (%d+) ([%d%.]+) (%d+)")
 M.screen = {
   width = tonumber(w) or 1728,
   left  = tonumber(l) or 864,
   right = tonumber(r) or 864,
   scale = tonumber(s) or 2,
+  narrowest = tonumber(n) or tonumber(w) or 1728, -- the bar is drawn on every display
 }
 
 -- App icons come back at 32pt; helper PNGs are rendered at backing scale.
 M.app_icon_scale = M.app_icon_size / 32
 M.image_scale = 1 / M.screen.scale
 
--- Each side is one fixed-width item spanning from the screen edge to the notch.
+-- Each side is one fixed-width item spanning from the screen edge to the notch,
+-- but never past the middle of the narrowest display (the same items are
+-- drawn on every display; wider ones would overlap and swallow clicks).
+local half = math.floor(M.screen.narrowest / 2) - M.bar.margin - 3
 M.side_width = {
-  left  = M.screen.left - M.bar.margin - 8,
-  right = M.screen.right - M.bar.margin - 8,
+  left  = math.min(M.screen.left - M.bar.margin - 8, half),
+  right = math.min(M.screen.right - M.bar.margin - 8, half),
 }
 
 return M
