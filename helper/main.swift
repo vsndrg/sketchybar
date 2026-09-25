@@ -718,6 +718,7 @@ final class Daemon {
 
 final class Picker: NSObject {
   var last = ""
+  var changed = false
   var pending: DispatchWorkItem?
 
   func run(_ initial: String) {
@@ -729,10 +730,11 @@ final class Picker: NSObject {
     panel.color = NSColor(cgColor: parseColor(initial)) ?? .systemBlue
     last = hex(panel.color.withAlphaComponent(1))
     panel.setTarget(self)
-    panel.setAction(#selector(changed(_:)))
+    panel.setAction(#selector(colorChanged(_:)))
     panel.title = "Bar accent"
     NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: panel, queue: .main) { _ in
-      print(self.last); fflush(stdout); exit(0)
+      // closing without touching the color is a cancel (keeps Auto mode)
+      print(self.changed ? self.last : "cancel"); fflush(stdout); exit(0)
     }
     app.activate(ignoringOtherApps: true)
     panel.center()
@@ -740,7 +742,8 @@ final class Picker: NSObject {
     app.run()
   }
 
-  @objc func changed(_ sender: NSColorPanel) {
+  @objc func colorChanged(_ sender: NSColorPanel) {
+    changed = true
     last = hex(sender.color.withAlphaComponent(1))
     pending?.cancel()
     let c = last
