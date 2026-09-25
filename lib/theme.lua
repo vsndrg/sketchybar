@@ -85,7 +85,7 @@ local function apply_borders(a)
   last_borders = args
   local f = io.open(borders_file, "w")
   if f then f:write(args, "\n") f:close() end
-  sbar.exec("pgrep -xq borders && borders " .. args)
+  sbar.exec("pgrep -xq borders && ~/.local/bin/borders " .. args)
 end
 
 function M.apply()
