@@ -1,282 +1,154 @@
-local colors    = require("colors")
-local icons     = require("icons")
-local settings  = require("settings")
-local app_icons = require("helpers.app_icons")
+-- Aerospace workspaces: number + real app icons, only occupied/focused ones.
+--
+-- One fixed-width item (edge → notch) showing one image (see lib/render.lua):
+-- a workspace switch is a single content swap. Images for switching to every
+-- other visible workspace are pre-rendered, so switches hit the cache.
+local config = require("config")
+local theme = require("lib.theme")
+local render = require("lib.render")
+local color = require("lib.color")
+
+local COUNT = 10
+local WIDTH = config.side_width.left
 
 sbar.add("event", "aerospace_workspace_change")
-sbar.add("event", "refresh_spaces_visibility")
+sbar.add("event", "aerospace_focus_change")
 
--- Single aerospace call to get all windows across all workspaces (~34ms vs ~1.3s for 10 calls)
-local function get_all_workspace_apps_async(callback)
-  sbar.exec("aerospace list-windows --all --format '%{workspace}|%{app-name}' 2>/dev/null", function(output)
-    local ws_apps = {}
-    for i = 1, 10 do ws_apps[i] = {} end
-    for line in output:gmatch("[^\r\n]+") do
-      local ws, app = line:match("^(%d+)|(.+)$")
-      ws = tonumber(ws)
-      if ws and app and app ~= "" then
-        app = app:match("^%s*(.-)%s*$")  -- trim
-        if ws_apps[ws] then
-          ws_apps[ws][app] = (ws_apps[ws][app] or 0) + 1
-        end
-      end
-    end
-    callback(ws_apps)
-  end)
-end
+local palette = theme.palette()
 
-local function build_icon_line(apps)
-  local line = ""
-  local empty = true
-  for app, _ in pairs(apps) do
-    empty = false
-    local lookup = app_icons[app]
-    line = line .. ((lookup == nil) and app_icons["Default"] or lookup)
-  end
-  return empty and "" or line
-end
-
-local spaces         = {}
-local space_paddings = {}
-local focused_ws     = 1
-local spaces_visible = true
-
--- Create all 10 space items immediately (drawing=false, will be updated async)
-for i = 1, 10, 1 do
-  local space = sbar.add("item", "space." .. i, {
-    updates       = true,
-    drawing       = false,
-    padding_left  = 2,
-    padding_right = 2,
-    icon = {
-      string        = tostring(i),
-      font          = {
-        family = settings.font.numbers,
-        style  = settings.font.style_map["Bold"],
-        size   = 11.0,
-      },
-      color         = colors.grey,
-      padding_left  = 8,
-      padding_right = 8,
-    },
-    label = {
-      string        = "",
-      font          = "sketchybar-app-font:Regular:13.0",
-      color         = colors.grey,
-      padding_left  = 0,
-      padding_right = 8,
-    },
-    background = {
-      height        = 22,
-      corner_radius = 6,
-      color         = colors.bg1,
-      border_width  = 0,
-    },
-    popup = { background = { border_width = 1, border_color = colors.popup.border } }
-  })
-
-  spaces[i] = space
-
-  local space_popup = sbar.add("item", {
-    position      = "popup." .. space.name,
-    padding_left  = 5,
-    padding_right = 0,
-    background    = {
-      drawing = true,
-      image   = { corner_radius = 9, scale = 0.2 }
-    }
-  })
-
-  local pad = sbar.add("item", "space.padding." .. i, {
-    drawing       = false,
-    width         = 4,
-    padding_left  = 0,
-    padding_right = 0,
-    background    = { drawing = false },
-    label         = { drawing = false },
-    icon          = { drawing = false },
-  })
-  space_paddings[i] = pad
-
-  space:subscribe("aerospace_workspace_change", function(env)
-    if not spaces_visible then return end
-
-    local fw       = tonumber(env.AEROSPACE_FOCUSED_WORKSPACE)
-    local sel_now  = (fw == i)
-
-    space:set({
-      icon       = { color = sel_now and colors.black or colors.grey },
-      label      = { color = sel_now and colors.black or colors.grey },
-      background = { color = sel_now and colors.accent or colors.bg1 },
-    })
-  end)
-
-  space:subscribe("mouse.clicked", function(env)
-    if env.BUTTON == "other" then
-      space_popup:set({ background = { image = "space." .. i } })
-      space:set({ popup = { drawing = "toggle" } })
-    else
-      sbar.exec("aerospace workspace " .. i)
-    end
-  end)
-
-  space:subscribe("mouse.entered", function(_)
-    if not spaces_visible then return end
-
-    local is_focused = (i == focused_ws)
-
-    space:set({
-      icon = {
-        color = is_focused and colors.black or colors.white,
-      },
-      label = {
-        color = is_focused and colors.black or colors.white,
-      },
-      background = {
-        color        = is_focused and colors.accent or colors.with_alpha(colors.grey, 0.25),
-        border_width = is_focused and 0 or 1,
-        border_color = is_focused and colors.transparent or colors.accent,
-      },
-    })
-  end)
-
-  space:subscribe("mouse.exited", function(_)
-    local is_focused = (i == focused_ws)
-
-    if space:query().popup.drawing == "on" then
-      space:set({ popup = { drawing = false } })
-    end
-
-    space:set({
-      icon = {
-        color = is_focused and colors.black or colors.grey,
-      },
-      label = {
-        color = is_focused and colors.black or colors.grey,
-      },
-      background = {
-        color        = is_focused and colors.accent or colors.bg1,
-        border_width = 0,
-        border_color = colors.transparent,
-      },
-    })
-  end)
-  -- space:subscribe("mouse.exited", function(_)
-  --   if space:query().popup.drawing == "on" then
-  --     space:set({ popup = { drawing = false } })
-  --   end
-  -- end)
-end
-
--- Full refresh (async) — one aerospace call for all workspaces
-local function refresh_all_spaces_async()
-  sbar.exec("aerospace list-workspaces --focused 2>/dev/null", function(result)
-    focused_ws = tonumber(result:match("%d+")) or focused_ws
-
-    get_all_workspace_apps_async(function(ws_apps)
-      for i = 1, 10 do
-        local apps = ws_apps[i]
-        local sel = (i == focused_ws)
-        local has_win = false
-        for _ in pairs(apps) do has_win = true; break end
-        local should_draw = sel or has_win
-
-        spaces[i]:set({
-          drawing    = should_draw,
-          icon       = { color = sel and colors.black or colors.grey },
-          label      = {
-            color  = sel and colors.black or colors.grey,
-            string = build_icon_line(apps),
-          },
-          background = { color = sel and colors.accent or colors.bg1 },
-        })
-        space_paddings[i]:set({ drawing = should_draw })
-      end
-    end)
-  end)
-end
-
--- Kick off async init
-refresh_all_spaces_async()
-
--- Observer: tracks focused workspace and updates app icon lines (async)
-local observer = sbar.add("item", { drawing = false, updates = true })
-
-observer:subscribe("aerospace_workspace_change", function(env)
-  local pw = tonumber(env.AEROSPACE_PREV_WORKSPACE)
-  local fw = tonumber(env.AEROSPACE_FOCUSED_WORKSPACE)
-
-  focused_ws = fw or focused_ws
-
-  -- Single call to get all workspace data, then update prev + focused + visibility
-  get_all_workspace_apps_async(function(ws_apps)
-    for i = 1, 10 do
-      local apps = ws_apps[i]
-      local sel = (i == focused_ws)
-      local has_win = false
-      for _ in pairs(apps) do has_win = true; break end
-      local should_draw = sel or has_win
-      local line = build_icon_line(apps)
-
-      spaces[i]:set({
-        drawing = should_draw,
-        label   = { string = line },
-      })
-      space_paddings[i]:set({ drawing = should_draw })
-    end
-  end)
-end)
-
--- Handle refresh request (from menus.lua when switching back to spaces view)
-observer:subscribe("refresh_spaces_visibility", function()
-  spaces_visible = true
-  refresh_all_spaces_async()
-end)
-
--- Spaces / Menus toggle indicator
-local spaces_indicator = sbar.add("item", {
-  padding_left  = 0,
-  padding_right = 0,
-  icon = {
-    padding_left  = 6,
-    padding_right = 6,
-    color         = colors.grey,
-    string        = icons.switch.on,
-    font          = {
-      family = settings.font.text,
-      style  = settings.font.style_map["Regular"],
-      size   = 12.0,
-    },
-  },
-  label = {
-    width         = 0,
-    padding_left  = 0,
-    padding_right = 6,
-    string        = "Spaces",
-    color         = colors.grey,
-  },
-  background = {
-    color        = colors.transparent,
-    border_color = colors.transparent,
-  }
+local item = sbar.add("item", "spaces", {
+  position = "left",
+  width = WIDTH,
+  icon = { drawing = false },
+  label = { drawing = false },
+  background = { drawing = true, color = 0, image = { drawing = true, scale = config.image_scale } },
 })
 
-spaces_indicator:subscribe("swap_menus_and_spaces", function(env)
-  local on = spaces_indicator:query().icon.value == icons.switch.on
-  spaces_indicator:set({ icon = on and icons.switch.off or icons.switch.on })
-  if on then
-    spaces_visible = false
+local state = { focused = 0, apps = {} }
+local ranges = {}
+local seq = 0
+
+local function job_for(focused)
+  local j = render.base("spaces", palette)
+  j.inset = config.pill.inset
+  j.pad = 7              -- pill edge → digit
+  j.num_gap = 3          -- digit → first icon
+  j.icon = config.app_icon_size
+  j.slot = config.app_icon_size + 2
+  j.tail = 5             -- icons carry ~1.5pt of built-in margin, so 5 reads as 7
+  j.pill_h = config.pill.height
+  j.pill_r = config.pill.radius
+  j.pill = color.hex(palette.pill)
+  j.fg = color.hex(palette.text)
+  j.dim = color.hex(palette.dim)
+  j.font = config.font.text
+  j.style = config.font.bold
+  j.size = config.font.size
+  j.max_slots = 8
+  j.workspaces = {}
+  for i = 1, COUNT do
+    local apps = state.apps[i] or {}
+    if #apps > 0 or i == focused then
+      table.insert(j.workspaces, { n = i, focused = i == focused, apps = apps })
+    end
   end
+  return render.row({ canvas_w = WIDTH, align = "left", islands = { j } })
+end
+
+local function prerender()
+  local jobs = {}
+  for i = 1, COUNT do
+    if i ~= state.focused and #(state.apps[i] or {}) > 0 then jobs[#jobs + 1] = job_for(i) end
+  end
+  if #jobs > 0 then render.run(jobs) end
+end
+
+local function show()
+  seq = seq + 1
+  local my = seq
+  render.run({ job_for(state.focused) }, function(m)
+    if my ~= seq then return end
+    ranges = m[1].islands[1].ranges or {}
+    item:set({ background = { image = { string = m[1].out } } })
+    prerender()
+  end)
+end
+
+-- Data -------------------------------------------------------------------------
+
+local cmd = "aerospace list-workspaces --focused; "
+  .. "aerospace list-windows --all --format '%{workspace}|%{app-bundle-id}'"
+
+local fetching, again = false, false
+local function refresh()
+  if fetching then again = true return end
+  fetching = true
+  sbar.exec(cmd, function(out)
+    fetching = false
+    if type(out) == "string" then
+      local by_ws, seen, first = {}, {}, true
+      for line in out:gmatch("[^\n]+") do
+        if first then
+          state.focused = tonumber(line) or state.focused
+          first = false
+        else
+          local ws, bundle = line:match("^(%d+)|(.+)$")
+          ws = tonumber(ws)
+          if ws and bundle and bundle ~= "" then
+            by_ws[ws] = by_ws[ws] or {}
+            seen[ws] = seen[ws] or {}
+            if not seen[ws][bundle] then
+              seen[ws][bundle] = true
+              table.insert(by_ws[ws], bundle)
+            end
+          end
+        end
+      end
+      state.apps = by_ws
+      show()
+    end
+    if again then
+      again = false
+      refresh()
+    end
+  end)
+end
+
+-- Events -----------------------------------------------------------------------
+
+item:subscribe("aerospace_workspace_change", function(env)
+  -- switch instantly with what we know (pre-rendered), then reconcile
+  local f = tonumber(env.AEROSPACE_FOCUSED_WORKSPACE)
+  if f and f ~= state.focused then
+    state.focused = f
+    show()
+  end
+  refresh()
+end)
+item:subscribe({ "aerospace_focus_change", "space_windows_change", "front_app_switched", "system_woke" }, refresh)
+
+-- One click event per action; the workspace is found from the cursor position.
+item:subscribe("mouse.clicked", function(env)
+  if env.BUTTON == "right" then
+    sbar.exec("sketchybar --trigger theme_menu")
+    return
+  end
+  sbar.exec("'" .. config.helper .. "' cursor", function(out)
+    local x = tonumber(tostring(out):match("%-?%d+"))
+    if not x then return end
+    x = x - config.bar.margin
+    for _, r in ipairs(ranges) do
+      if x >= r[2] and x < r[3] then
+        if r[1] ~= state.focused then sbar.exec("aerospace workspace " .. math.floor(r[1])) end
+        return
+      end
+    end
+  end)
 end)
 
-spaces_indicator:subscribe("mouse.entered", function(_)
-  spaces_indicator:set({ icon = { color = colors.accent } })
+theme.on(function(p)
+  palette = p
+  show()
 end)
 
-spaces_indicator:subscribe("mouse.exited", function(_)
-  spaces_indicator:set({ icon = { color = colors.grey } })
-end)
-
-spaces_indicator:subscribe("mouse.clicked", function(_)
-  sbar.trigger("swap_menus_and_spaces")
-end)
+refresh()
