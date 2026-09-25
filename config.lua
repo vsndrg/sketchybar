@@ -35,19 +35,42 @@ local M = {
   anim = { curve = "tanh", frames = 14 },
 }
 
--- Derived geometry. Island radius = h / (2 * 1.528): the largest radius at
--- which Apple's continuous corner still fits without being clamped. Inner
--- pills are concentric (inset 3). Items are centered in the bar, so they are
--- shifted down by half the gap to sit flush with the bottom of the strip.
+-- Islands hang `gap` from the top and end flush with the bar (the notch
+-- strip): 32 - gap tall. Island radius = h / (2 * 1.528): the largest radius
+-- at which Apple's continuous corner still fits without being clamped. Inner
+-- pills are concentric (inset 3).
 do
   local g = M.bar.gap
   local h = M.bar.height - g
   local r = math.floor(h / (2 * 1.528) * 4 + 0.5) / 4
   M.bar.margin = g
-  M.bar.y_offset = -g / 2
   M.island = { height = h, radius = r, gap = g, stroke = 1 }
   M.pill = { height = h - 6, radius = r - 3, inset = 3 }
   M.app_icon_size = h - 8
+end
+
+-- A display whose menu bar is lower than the bar gets a shorter strip (the
+-- auto-hidden menu bar must cover the islands when it slides in). Its islands
+-- are the same islands scaled down as a whole (`scale`, rendered at a higher
+-- pixel density, so still crisp); items are centered in the bar, hence the
+-- y_offset that keeps them `gap` below the top.
+function M.strip(strip)
+  local g = M.bar.gap
+  local h = strip - g
+  return {
+    strip = strip,
+    scale = h / M.island.height,
+    y_offset = (M.bar.height - h) / 2 - g,
+    island = M.island,
+    pill = M.pill,
+  }
+end
+M.bar.y_offset = M.strip(M.bar.height).y_offset
+
+-- Strip height on a display with a menu bar `menu_bar` pt tall (0 = unknown).
+function M.strip_height(menu_bar)
+  if menu_bar and menu_bar > 0 then return math.min(M.bar.height, menu_bar) end
+  return M.bar.height
 end
 
 -- Main screen geometry (width of the areas left/right of the notch) and backing scale.

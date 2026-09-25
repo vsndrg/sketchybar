@@ -111,23 +111,26 @@ function M.gc(max_age)
   end
 end
 
--- A fixed-size canvas of islands (see helper renderRow).
-function M.row(opts)
+-- A fixed-size canvas of islands (see helper renderRow). geo: a strip
+-- geometry (config.strip): the image is shown scaled by geo.scale.
+function M.row(opts, geo)
   opts.kind = "row"
   opts.h = config.island.height
+  if geo and geo.scale ~= 1 then opts.scale = geo.scale end
   return M.job(opts)
 end
 
 -- Shared island style for jobs.
 function M.base(kind, palette)
   local color = require("lib.color")
+  local island = config.island
   return {
     kind = kind,
-    h = config.island.height,
-    r = config.island.radius,
+    h = island.height,
+    r = island.radius,
     fill = color.hex(palette.island),
     stroke = color.hex(palette.stroke),
-    sw = config.island.stroke,
+    sw = island.stroke,
   }
 end
 

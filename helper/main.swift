@@ -58,14 +58,17 @@ func hex(_ c: NSColor) -> String {
 
 let backing: CGFloat = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
 
-func render(_ w: CGFloat, _ h: CGFloat, to out: String, _ draw: (CGContext) -> Void) {
+/// scale: pixel density relative to the backing scale; shown at 1/backing the
+/// image is a crisp scaled copy (a shorter bar strip on some display).
+func render(_ w: CGFloat, _ h: CGFloat, to out: String, scale: CGFloat = 1, _ draw: (CGContext) -> Void) {
+  let density = backing * scale
   // an empty/invalid size renders nothing; the caller keeps its previous image
-  guard w.isFinite, h.isFinite, w >= 1, h >= 1,
+  guard w.isFinite, h.isFinite, w >= 1, h >= 1, density > 0,
         let cs = CGColorSpace(name: CGColorSpace.sRGB),
-        let ctx = CGContext(data: nil, width: Int((w * backing).rounded()), height: Int((h * backing).rounded()),
+        let ctx = CGContext(data: nil, width: Int((w * density).rounded()), height: Int((h * density).rounded()),
                             bitsPerComponent: 8, bytesPerRow: 0, space: cs,
                             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
-  ctx.scaleBy(x: backing, y: backing)
+  ctx.scaleBy(x: density, y: density)
   ctx.setShouldAntialias(true)
   ctx.interpolationQuality = .high
   draw(ctx)
@@ -510,7 +513,7 @@ func renderRow(_ j: [String: Any]) -> [String: Any] {
     meta.append(["x0": x, "x1": x + l.w, "ranges": l.ranges])
     x += l.w + gap
   }
-  render(canvas, h, to: str(j, "out")) { ctx in
+  render(canvas, h, to: str(j, "out"), scale: j["scale"] == nil ? 1 : num(j, "scale")) { ctx in
     var x = start
     for l in laid {
       ctx.saveGState(); ctx.translateBy(x: x, y: 0); l.draw(ctx); ctx.restoreGState()
@@ -588,13 +591,36 @@ func displayID(_ s: NSScreen) -> CGDirectDisplayID {
   (s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
 }
 
+/// Menu bar height of each display (0 = unknown). WindowServer keeps one
+/// menu bar window per display, listed even while the menu bar is
+/// auto-hidden (then just moved above the screen). Matched by owner and
+/// level: window names of other apps need Screen Recording.
+func menuBarHeights() -> [CGDirectDisplayID: Int] {
+  var out: [CGDirectDisplayID: Int] = [:]
+  let level = Int(CGWindowLevelForKey(.mainMenuWindow))
+  let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
+  let bars = list.compactMap { w -> CGRect? in
+    guard w[kCGWindowOwnerName as String] as? String == "Window Server",
+          w[kCGWindowLayer as String] as? Int == level,
+          let d = w[kCGWindowBounds as String] as? NSDictionary else { return nil }
+    return CGRect(dictionaryRepresentation: d)
+  }
+  for s in NSScreen.screens {
+    let id = displayID(s), b = CGDisplayBounds(id)
+    if let r = bars.first(where: { abs($0.minX - b.minX) < 1 && abs($0.width - b.width) < 1 }) {
+      out[id] = Int(r.height)
+    }
+  }
+  return out
+}
+
 /// The bar is drawn on every display, so positions are relative to the screen
 /// under the cursor: returns (x from that screen's left edge, its width).
-func cursorOnScreen() -> (x: CGFloat, width: CGFloat) {
+func cursorOnScreen() -> (x: CGFloat, width: CGFloat, display: CGDirectDisplayID) {
   let p = NSEvent.mouseLocation
-  let screen = NSScreen.screens.first { NSMouseInRect(p, $0.frame, false) } ?? NSScreen.main
-  guard let f = screen?.frame else { return (p.x, 0) }
-  return (p.x - f.minX, f.width)
+  guard let screen = NSScreen.screens.first(where: { NSMouseInRect(p, $0.frame, false) }) ?? NSScreen.main
+  else { return (p.x, 0, 0) }
+  return (p.x - screen.frame.minX, screen.frame.width, displayID(screen))
 }
 
 // MARK: - Keyboard layout
@@ -724,12 +750,13 @@ final class Daemon {
   init(cornerRadius: CGFloat) { corners = Corners(radius: cornerRadius) }
 
   // Hover regions of the bar, written by lua: "strip <height>" then
-  // "<name> <left|right> <d0> <d1>" — [d0, d1) measured from that edge of the
-  // screen under the cursor, so the same regions apply on every display.
+  // "<name> <left|right> <d0> <d1> [display]" — [d0, d1) measured from that
+  // edge of the screen under the cursor; only on that CGDirectDisplayID when
+  // given, else on every display.
   // Fixed-size items can't tell which island the cursor is over, so the daemon
   // does, and fires `bar_hover REGION=<name>` only when the region changes.
   let regionsPath = NSHomeDirectory() + "/.local/state/sketchybar/regions"
-  var regions: [(name: String, fromRight: Bool, d0: CGFloat, d1: CGFloat)] = []
+  var regions: [(name: String, fromRight: Bool, d0: CGFloat, d1: CGFloat, display: String?)] = []
   var strip: CGFloat = 32
   var regionsStamp: Date?
   var hovered = ""
@@ -746,7 +773,7 @@ final class Daemon {
       guard f.count >= 2 else { continue }
       if f[0] == "strip", let h = Double(f[1]) { strip = CGFloat(h); continue }
       if f.count >= 4, f[1] == "left" || f[1] == "right", let a = Double(f[2]), let b = Double(f[3]) {
-        regions.append((String(f[0]), f[1] == "right", CGFloat(a), CGFloat(b)))
+        regions.append((String(f[0]), f[1] == "right", CGFloat(a), CGFloat(b), f.count >= 5 ? String(f[4]) : nil))
       }
     }
   }
@@ -761,7 +788,7 @@ final class Daemon {
       let fromLeft = p.x - screen.frame.minX, fromRight = screen.frame.maxX - p.x
       name = regions.first {
         let d = $0.fromRight ? fromRight : fromLeft
-        return d >= $0.d0 && d < $0.d1
+        return ($0.display == nil || $0.display == display) && d >= $0.d0 && d < $0.d1
       }?.name ?? ""
     }
     if name == "" { display = "" }
@@ -921,8 +948,9 @@ case "measure":
 case "accent": print(accent())
 case "render": renderJobs(args.count > 1 ? args[1] : "[]")
 case "cursor":
+  // x on the screen under the cursor, that screen's width and CGDirectDisplayID
   let c = cursorOnScreen()
-  print(Int(c.x), Int(c.width))
+  print(Int(c.x), Int(c.width), c.display)
 case "layout": if args.count > 1, args[1] == "next" { nextLayout() } else { print(layoutCode()) }
 case "geometry":
   // the main screen (menu bar) — other displays don't affect the geometry
@@ -932,8 +960,10 @@ case "geometry":
   let r = s.auxiliaryTopRightArea?.width ?? w / 2
   print(Int(w), Int(l), Int(r), backing)
 case "screens":
+  // NSScreen index, CGDirectDisplayID, width, width left of the notch (0 = none), menu bar height
+  let menuBars = menuBarHeights()
   for (i, s) in NSScreen.screens.enumerated() {
-    print(i + 1, displayID(s), Int(s.frame.width), Int(s.auxiliaryTopLeftArea?.width ?? 0))
+    print(i + 1, displayID(s), Int(s.frame.width), Int(s.auxiliaryTopLeftArea?.width ?? 0), menuBars[displayID(s)] ?? 0)
   }
 case "pick": Picker().run(args.count > 1 ? args[1] : "0xff8ec8ff")
 default:

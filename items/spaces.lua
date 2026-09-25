@@ -17,6 +17,7 @@ local theme = require("lib.theme")
 local render = require("lib.render")
 local color = require("lib.color")
 local regions = require("lib.regions")
+local screens = require("lib.displays")
 
 sbar.add("event", "aerospace_workspace_change")
 sbar.add("event", "aerospace_focus_change")
@@ -25,11 +26,8 @@ local palette = theme.palette()
 
 -- Displays ----------------------------------------------------------------------
 
--- aerospace names monitors by NSScreen index (monitor-appkit-nsscreen-screens-id),
--- sketchybar by arrangement id; both map to a CGDirectDisplayID. Displays
--- come and go (Sidecar): items are added/removed live, never by a reload.
 local MAIN = 1 -- NSScreen index of the main monitor: new workspaces open there
-local displays = {} -- { did, arr = arrangement id, mon = NSScreen index, width, item, hovered }
+local displays = {} -- { did, arr, mon, width, geo, item, hovered }
 local by_did = {}
 local clicked -- mouse.clicked handler, defined below
 
@@ -37,47 +35,27 @@ local clicked -- mouse.clicked handler, defined below
 local events = sbar.add("item", "spaces.events", { drawing = false, updates = true })
 
 local function sync_displays()
-  local screens = {}
-  local f = io.popen("'" .. config.helper .. "' screens 2>/dev/null")
-  for line in (f and f:read("*a") or ""):gmatch("[^\n]+") do
-    local idx, did, w, notch = line:match("^(%d+) (%d+) (%d+) (%d+)$")
-    if idx then
-      screens[tonumber(did)] = { mon = tonumber(idx), w = tonumber(w), notch = tonumber(notch) }
-    end
-  end
-  if f then f:close() end
-  local list = {}
-  local q = sbar.query("displays")
-  for _, x in ipairs(type(q) == "table" and q or {}) do
-    local sc = screens[tonumber(x.DirectDisplayID)]
-    if sc then
-      list[#list + 1] = { did = tonumber(x.DirectDisplayID), arr = x["arrangement-id"], mon = sc.mon,
-                          width = config.left_width(sc.w, sc.notch) }
-    end
-  end
-  if #list == 0 then return end -- mid-reconfiguration: keep what we have
-  table.sort(list, function(a, b) return a.arr < b.arr end)
-
   local seen, now = {}, {}
-  for _, x in ipairs(list) do
+  for _, x in ipairs(screens.list) do
+    local width = config.left_width(x.w, x.notch)
     local d = by_did[x.did]
     if not d then
       d = { did = x.did, hovered = 0 }
       d.item = sbar.add("item", "spaces." .. x.did, {
         position = "left",
         display = x.arr,
-        width = x.width,
-        y_offset = config.bar.y_offset,
+        width = width,
+        y_offset = x.geo.y_offset,
         icon = { drawing = false },
         label = { drawing = false },
         background = { drawing = true, color = 0, image = { drawing = true, scale = config.image_scale } },
       })
       d.item:subscribe("mouse.clicked", clicked)
       by_did[x.did] = d
-    elseif d.arr ~= x.arr or d.width ~= x.width then
-      d.item:set({ display = x.arr, width = x.width })
+    elseif d.arr ~= x.arr or d.width ~= width or d.geo.strip ~= x.geo.strip then
+      d.item:set({ display = x.arr, width = width, y_offset = x.geo.y_offset })
     end
-    d.arr, d.mon, d.width = x.arr, x.mon, x.width
+    d.arr, d.mon, d.width, d.geo = x.arr, x.mon, width, x.geo
     seen[x.did] = true
     now[#now + 1] = d
   end
@@ -164,7 +142,8 @@ local function job_for(d, st, hovered)
       apps = st.apps[n] or {},
     })
   end
-  return render.row({ canvas_w = d.width, align = "left", islands = { j } })
+  -- drawn at the bar's size, shown scaled to the display's strip
+  return render.row({ canvas_w = d.width / d.geo.scale, align = "left", islands = { j } }, d.geo)
 end
 
 -- Every state one step away is rendered ahead: switching to any visible
@@ -196,9 +175,14 @@ local function show()
       d.item:set({ background = { image = { string = m[i].out } } })
     end
     sbar.end_config()
+    -- ranges are in the bar's units; scaled per display
     local list = {}
-    for _, r in ipairs(ranges) do
-      list[#list + 1] = { "space." .. math.floor(r[1]), "left", config.bar.margin + r[2], config.bar.margin + r[3] }
+    for _, d in ipairs(displays) do
+      local s = d.geo.scale
+      for _, r in ipairs(ranges) do
+        list[#list + 1] = { "space." .. math.floor(r[1]), "left",
+                            config.bar.margin + r[2] * s, config.bar.margin + r[3] * s, d.did }
+      end
     end
     regions.set("spaces", list)
     prerender()
@@ -292,17 +276,19 @@ events:subscribe("bar_hover", function(env)
 end)
 
 -- One click event per action; the workspace is found from the cursor position
--- (ranges are the same on every display).
+-- (ranges are in the bar's units, scaled on displays with a shorter strip).
 clicked = function(env)
   if env.BUTTON == "right" then
     sbar.exec("sketchybar --trigger theme_menu")
     return
   end
-  -- "<x on the screen under the cursor> <that screen's width>"
+  -- "<x on the screen under the cursor> <that screen's width> <its display id>"
   sbar.exec("'" .. config.helper .. "' cursor", function(out)
-    local x = tonumber(tostring(out):match("^%s*(%-?%d+)"))
+    local x, did = tostring(out):match("^%s*(%-?%d+)%s+%d+%s*(%d*)")
+    x = tonumber(x)
     if not x then return end
-    x = x - config.bar.margin
+    local d = by_did[tonumber(did)]
+    x = (x - config.bar.margin) / (d and d.geo.scale or 1)
     for _, r in ipairs(ranges) do
       if x >= r[2] and x < r[3] then
         if r[1] ~= state.focused then sbar.exec("aerospace workspace " .. math.floor(r[1])) end
@@ -312,17 +298,10 @@ clicked = function(env)
   end)
 end
 
--- Display set changes (Sidecar connect/disconnect): display_change also fires
--- spuriously and in bursts, so settle first; aerospace rearranges too.
-local settling = false
-events:subscribe("display_change", function()
-  if settling then return end
-  settling = true
-  sbar.delay(0.5, function()
-    settling = false
-    sync_displays()
-    refresh()
-  end)
+-- Display set changes (Sidecar connect/disconnect); aerospace rearranges too.
+screens.on_change(function()
+  sync_displays()
+  refresh()
 end)
 
 sync_displays()

@@ -22,7 +22,8 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
 - Multi-display: one `spaces.<CGDirectDisplayID>` item per display (`display=` arrangement id), added/
   removed LIVE on display_change (user dislikes the visible bar reload). AeroSpace monitor = NSScreen
   index (`monitor-appkit-nsscreen-screens-id`) → `barhelper screens` → CGDirectDisplayID →
-  `sbar.query("displays")` → arrangement id. Status (right) is one item on all displays, width capped
+  `sbar.query("displays")` → arrangement id (shared list: `lib/displays.lua`). Status (right) is also one
+  item per display (`status.<did>`, same content), width capped
   (`config.status_max`); spaces width per display (`config.left_width`). sketchybarrc reloads only
   when the MAIN screen geometry changes. Ranges identical on all displays (left-aligned).
 - AeroSpace: a hidden workspace remembers its monitor by the monitor's top-left point
@@ -41,14 +42,22 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   focus latency, `glow_radius=` option, window-radius (windows reporting no corner radius, e.g. WezTerm
   without a title bar, get the smallest radius other windows report instead of 9). `build.sh` builds
   offline from `~/.cache/borders-src`.
+- sketchybar shows a popup on the display with the FOCUSED window, anchored at the item's rect there:
+  a popup of a single-display item lands at -9999 elsewhere. Battery tooltip → zero-width all-display
+  anchor `status.anchor`, shown only when the hovered display = aerospace's focused monitor.
 - `sketchybarrc` runs `pkill -f 'barhelper daemon'`: never put that literal string in your own shell
   command during a reload (it kills your shell) — use `pgrep -f 'barhelpe[r] daemon'`.
 
 ## Design
-- One gap G = 6 (`config.lua` `bar.gap`, derived geometry below it): screen edge → island → window →
-  window → edge, and between islands. Bar h 32 = notch strip; islands h 32 − G = 26 hang G from the top
-  and end flush with the strip (item y_offset −G/2). Windows start at 38 (outer.top built-in 6 / others
-  38), outer.bottom 5 (AeroSpace lays out 1pt short). aerospace.toml gaps must be changed by hand.
+- One gap G = 6 (`config.lua` `bar.gap`): screen edge → island → window → window → edge, and between
+  islands. Bar h 32 = notch strip. Per display strip = min(32, its menu bar height) (`barhelper screens`
+  col 5, from WindowServer's menu bar windows, listed even when auto-hidden: built-in 33, iPad 30), so
+  the auto-hidden menu bar covers the islands. Islands hang G from the top, end flush with the strip.
+  The Mac is the reference: on a shorter strip the islands are the SAME islands scaled as a whole
+  (`config.strip(strip).scale` = (strip−G)/(32−G); helper renders at higher pixel density, crisp),
+  gap between islands kept at G on screen; hover regions per display (5th field = display id), clicks
+  scaled via `barhelper cursor` (prints display id). Windows start at 38 built-in / 36 others (outer.top built-in 6 / others
+  36), outer.bottom 5 (AeroSpace lays out 1pt short). aerospace.toml gaps must be changed by hand.
   The user tried: G=10 (islands too thin, gap under bar too big), counting the border into the gap
   (rejected) — keep gaps measured from the window.
 - Islands: squircle (SwiftUI continuous corners), r = h/3.056; inner pill h−6, concentric (inset 3).

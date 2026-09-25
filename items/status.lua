@@ -1,17 +1,21 @@
 -- Right side, right to left: clock │ battery │ layout — three islands drawn
 -- into ONE fixed-width item (notch → edge), so any change (a minute ticking,
 -- the date, a charging bolt) is a single content swap with nothing shifting.
+-- One such item per display (islands as tall as that display's strip, see
+-- config.strip); the content and horizontal layout are the same on all.
 local config = require("config")
 local theme = require("lib.theme")
 local render = require("lib.render")
 local color = require("lib.color")
 local regions = require("lib.regions")
+local screens = require("lib.displays")
 
 local font = config.font
 local WIDTH = config.side_width.right
 -- The item is right-aligned on every display: positions are measured from
--- the right edge of the screen, which works on any display width.
-local RIGHT = config.bar.margin + WIDTH -- item's left edge, from the screen's right edge
+-- the right edge of the screen, which works on any display width. On a
+-- display with a shorter strip the whole item is scaled (config.strip).
+local function width_for(geo) return math.floor(WIDTH * geo.scale + 0.5) end
 local palette = theme.palette()
 
 sbar.add("event", "layout_change")
@@ -23,26 +27,63 @@ local anchor = sbar.add("item", "menu.anchor", {
   popup = { align = "right", horizontal = true, height = config.popup.height, y_offset = config.popup.offset },
 })
 
-local item = sbar.add("item", "status", {
+-- global events and the clock routine: an invisible item that never goes away
+local events = sbar.add("item", "status", { drawing = false, updates = true, update_freq = 10 })
+
+-- Battery tooltip: hangs off a zero-width anchor at the right edge that is on
+-- every display (a popup of a single-display item lands off-screen: sketchybar
+-- positions popups by the item's rect on the last display). Its canvas reaches
+-- from the bubble to the right edge, so a right-aligned popup puts the bubble
+-- centered under the battery. Filled for the hovered display's strip.
+local tip_anchor = sbar.add("item", "status.anchor", {
   position = "right",
-  width = WIDTH,
-  y_offset = config.bar.y_offset,
-  updates = true,
-  update_freq = 10,
-  icon = { drawing = false },
-  label = { drawing = false },
-  background = { drawing = true, color = 0, image = { drawing = true, scale = config.image_scale } },
+  width = 0,
   popup = { align = "right", horizontal = true, height = config.island.height, y_offset = config.popup.offset },
 })
-
--- Battery tooltip: its canvas reaches from the bubble to the right edge, so a
--- right-aligned popup puts the bubble centered under the battery.
 local tip = sbar.add("item", "status.tip", {
-  position = "popup." .. item.name,
+  position = "popup." .. tip_anchor.name,
   icon = { drawing = false },
   label = { drawing = false },
   background = { drawing = true, color = 0, image = { drawing = true, scale = config.image_scale } },
 })
+local tips = {} -- strip -> tooltip render meta
+
+local clicked -- mouse.clicked handler, defined below
+local by_did = {} -- did -> { item, geo }
+local displays = {}
+
+local function sync_displays()
+  local seen, now = {}, {}
+  for _, x in ipairs(screens.list) do
+    local d = by_did[x.did]
+    if not d then
+      d = { did = x.did }
+      d.item = sbar.add("item", "status." .. x.did, {
+        position = "right",
+        display = x.arr,
+        width = width_for(x.geo),
+        y_offset = x.geo.y_offset,
+        icon = { drawing = false },
+        label = { drawing = false },
+        background = { drawing = true, color = 0, image = { drawing = true, scale = config.image_scale } },
+      })
+      d.item:subscribe("mouse.clicked", function(env) clicked(env) end)
+      by_did[x.did] = d
+    elseif d.arr ~= x.arr or d.geo.strip ~= x.geo.strip then
+      d.item:set({ display = x.arr, width = width_for(x.geo), y_offset = x.geo.y_offset })
+    end
+    d.arr, d.mon, d.geo = x.arr, x.mon, x.geo
+    seen[x.did] = true
+    now[#now + 1] = d
+  end
+  for did, d in pairs(by_did) do
+    if not seen[did] then
+      sbar.remove(d.item.name)
+      by_did[did] = nil
+    end
+  end
+  displays = now
+end
 
 local state = {
   code = "EN",
@@ -50,7 +91,9 @@ local state = {
   has_battery = true,
   level = 100, charge = 0, low = false, status = "",
 }
-local islands = {} -- name -> { x0, x1 } from the last render
+-- strip -> name -> { r0, r1 }: island edges from the item's right edge, in the
+-- bar's units (multiply by that strip's scale for points), from the last render
+local islands = {}
 local seq = 0
 
 -- Wording and title case as in the macOS battery menu.
@@ -70,60 +113,97 @@ local function text(str, style, c, extra)
 end
 
 local function write_regions()
-  local b = islands.battery
   -- distances from the screen's right edge (see lib/regions.lua)
-  regions.set("status", b and { { "battery", "right", RIGHT - b.x1, RIGHT - b.x0 } } or {})
+  local list = {}
+  for _, d in ipairs(displays) do
+    local b = islands[d.geo.strip] and islands[d.geo.strip].battery
+    local s, m = d.geo.scale, config.bar.margin
+    if b then list[#list + 1] = { "battery", "right", m + b.r0 * s, m + b.r1 * s, d.did } end
+  end
+  regions.set("status", list)
 end
 
 local function show()
   seq = seq + 1
   local my = seq
 
-  local input = render.base("island", palette)
-  input.pad_l, input.pad_r = 10, 10
-  input.parts = { text(state.code, font.bold, palette.muted, { min_text = "RU", align = "center" }) }
-
-  local battery = render.base("island", palette)
-  battery.pad_l, battery.pad_r = 10, 10
-  battery.parts = { { type = "battery", level = state.level, state = state.charge,
-    color = color.hex(state.low and palette.red or palette.text) } }
-
-  local d = os.date("%a ") .. tonumber(os.date("%d")) .. os.date(" %b")
-  local clock = render.base("island", palette)
-  clock.pad_l, clock.pad_r = 10, 10
-  clock.parts = {
-    text(d, font.medium, palette.muted),
-    { type = "gap", w = 6 },
-    -- widest digits reserve the width, so the island never changes minute to minute
-    text(os.date("%H:%M"), font.bold, palette.text, { min_text = "00:00", align = "right" }),
-  }
-
-  local names = { "input", "clock" }
-  local parts = { input, clock }
-  if state.has_battery then
-    table.insert(names, 2, "battery")
-    table.insert(parts, 2, battery)
+  -- one row (and tooltip) per distinct strip height
+  local strips, geos = {}, {}
+  for _, d in ipairs(displays) do
+    if not geos[d.geo.strip] then
+      geos[d.geo.strip] = d.geo
+      strips[#strips + 1] = d.geo.strip
+    end
   end
-  local row = render.row({ canvas_w = WIDTH, align = "right", gap = config.island.gap, islands = parts })
+  if #strips == 0 then return end
 
-  render.run({ row }, function(m)
+  local names, rows = { "input", "clock" }, {}
+  if state.has_battery then table.insert(names, 2, "battery") end
+  local d = os.date("%a ") .. tonumber(os.date("%d")) .. os.date(" %b")
+  for i, strip in ipairs(strips) do
+    local geo = geos[strip]
+    local input = render.base("island", palette)
+    input.pad_l, input.pad_r = 10, 10
+    input.parts = { text(state.code, font.bold, palette.muted, { min_text = "RU", align = "center" }) }
+
+    local battery = render.base("island", palette)
+    battery.pad_l, battery.pad_r = 10, 10
+    battery.parts = { { type = "battery", level = state.level, state = state.charge,
+      color = color.hex(state.low and palette.red or palette.text) } }
+
+    local clock = render.base("island", palette)
+    clock.pad_l, clock.pad_r = 10, 10
+    clock.parts = {
+      text(d, font.medium, palette.muted),
+      { type = "gap", w = 6 },
+      -- widest digits reserve the width, so the island never changes minute to minute
+      text(os.date("%H:%M"), font.bold, palette.text, { min_text = "00:00", align = "right" }),
+    }
+
+    local parts = { input, clock }
+    if state.has_battery then table.insert(parts, 2, battery) end
+    -- drawn at the bar's size, shown scaled: the canvas fills the scaled item
+    -- and the gap between islands stays config.island.gap on screen
+    rows[i] = render.row({ canvas_w = width_for(geo) / geo.scale, align = "right",
+                           gap = config.island.gap / geo.scale, islands = parts }, geo)
+  end
+
+  render.run(rows, function(m)
     if my ~= seq then return end
     islands = {}
-    for i, name in ipairs(names) do islands[name] = m[1].islands[i] end
-    item:set({ background = { image = { string = m[1].out } } })
+    for i, strip in ipairs(strips) do
+      local cw = width_for(geos[strip]) / geos[strip].scale
+      islands[strip] = {}
+      for k, name in ipairs(names) do
+        local isl = m[i].islands[k]
+        islands[strip][name] = { r0 = cw - isl.x1, r1 = cw - isl.x0 }
+      end
+    end
+    local out = {}
+    for i, strip in ipairs(strips) do out[strip] = m[i].out end
+    sbar.begin_config()
+    for _, x in ipairs(displays) do
+      x.item:set({ background = { image = { string = out[x.geo.strip] } } })
+    end
+    sbar.end_config()
     write_regions()
 
     -- tooltip for the current battery state (rendered ahead of any hover)
-    local b = islands.battery
-    if not b then return end
-    local bubble = render.base("island", palette)
-    bubble.fill = color.hex(palette.popup)
-    bubble.pad_l, bubble.pad_r = 10, 10
-    bubble.parts = { text(state.status, font.medium, palette.muted) }
-    local t = render.row({ center_from_right = WIDTH - (b.x0 + b.x1) / 2, align = "left", islands = { bubble } })
-    render.run({ t }, function(tm)
+    if not state.has_battery then return end
+    local jobs = {}
+    for i, strip in ipairs(strips) do
+      local b = islands[strip].battery
+      local bubble = render.base("island", palette)
+      bubble.fill = color.hex(palette.popup)
+      bubble.pad_l, bubble.pad_r = 10, 10
+      bubble.parts = { text(state.status, font.medium, palette.muted) }
+      jobs[i] = render.row({ center_from_right = (b.r0 + b.r1) / 2, align = "left", islands = { bubble } },
+        geos[strip])
+    end
+    render.run(jobs, function(tm)
       if my ~= seq then return end
-      tip:set({ width = math.ceil(tm[1].width), background = { image = { string = tm[1].out } } })
+      tips = {}
+      for i, strip in ipairs(strips) do tips[strip] = tm[i] end
     end)
   end)
 end
@@ -167,43 +247,82 @@ end
 -- Events -----------------------------------------------------------------------
 
 local ticks = 0
-item:subscribe("routine", function()
+events:subscribe("routine", function()
   ticks = ticks + 1
   if ticks % 6 == 0 then update_battery() else tick() end
   if ticks % 60 == 0 then render.gc(30 * 60) end -- every 10 minutes
 end)
-item:subscribe({ "forced", "system_woke", "power_source_change" }, update_battery)
+events:subscribe({ "forced", "system_woke", "power_source_change" }, update_battery)
 
-item:subscribe("layout_change", function(env)
+events:subscribe("layout_change", function(env)
   if env.LAYOUT and env.LAYOUT ~= "" and env.LAYOUT ~= state.code then
     state.code = env.LAYOUT
     show()
   end
 end)
 
-item:subscribe("bar_hover", function(env)
-  item:set({ popup = { drawing = env.REGION == "battery" and state.has_battery } })
+-- sketchybar shows popups on the display with the focused window, whatever
+-- display the anchor is hovered on: show the tooltip only when those match
+-- (aerospace's focused monitor), else it would pop up on another display.
+local hover_seq = 0
+events:subscribe("bar_hover", function(env)
+  hover_seq = hover_seq + 1
+  local my = hover_seq
+  local d = by_did[tonumber(env.DISPLAY)]
+  local t = d and tips[d.geo.strip]
+  if env.REGION ~= "battery" or not state.has_battery or not t then
+    tip_anchor:set({ popup = { drawing = false } })
+    return
+  end
+  sbar.exec("aerospace list-monitors --focused --format '%{monitor-appkit-nsscreen-screens-id}'", function(out)
+    if my ~= hover_seq then return end
+    if tonumber(tostring(out):match("%d+")) ~= d.mon then
+      tip_anchor:set({ popup = { drawing = false } })
+      return
+    end
+    local sc = d.geo.scale
+    tip:set({ width = math.ceil(t.width * sc), background = { image = { string = t.out } } })
+    tip_anchor:set({ popup = {
+      drawing = true,
+      height = math.floor(config.island.height * sc + 0.5),
+      -- popups hang below the bar: lift them where the strip is shorter
+      y_offset = config.popup.offset - (config.bar.height - d.geo.strip),
+    } })
+  end)
 end)
 
-item:subscribe("mouse.clicked", function(env)
+clicked = function(env)
   if env.BUTTON == "right" then
     sbar.exec("sketchybar --trigger theme_menu")
     return
   end
-  -- "<x on the screen under the cursor> <that screen's width>"
+  -- "<x on the screen under the cursor> <that screen's width> <its display id>"
   sbar.exec("'" .. config.helper .. "' cursor", function(out)
-    local x, w = tostring(out):match("^%s*(%-?%d+)%s+(%d+)")
+    local x, w, did = tostring(out):match("^%s*(%-?%d+)%s+(%d+)%s*(%d*)")
     x, w = tonumber(x), tonumber(w)
-    if not x or not w then return end
-    x = x - (w - RIGHT)
-    local function inside(name) return islands[name] and x >= islands[name].x0 and x < islands[name].x1 end
+    local d = by_did[tonumber(did)] or displays[1]
+    if not x or not w or not d or not islands[d.geo.strip] then return end
+    -- distance from the item's right edge, in the bar's units
+    local r = (w - config.bar.margin - x) / d.geo.scale
+    local function inside(name)
+      local isl = islands[d.geo.strip][name]
+      return isl and r > isl.r0 and r <= isl.r1
+    end
     if inside("input") then
       sbar.exec("'" .. config.helper .. "' layout next")
     elseif inside("clock") then
       sbar.exec("open -a Calendar")
     end
   end)
+end
+
+-- Display set changes (Sidecar connect/disconnect)
+screens.on_change(function()
+  sync_displays()
+  show()
 end)
+
+sync_displays()
 
 theme.on(function(p)
   palette = p

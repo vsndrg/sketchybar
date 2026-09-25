@@ -1,0 +1,89 @@
+-- Connected displays, shared by the per-display items (spaces, status).
+--
+-- aerospace names monitors by NSScreen index (monitor-appkit-nsscreen-screens-id),
+-- sketchybar by arrangement id; both map to a CGDirectDisplayID. Displays
+-- come and go (Sidecar): items are added/removed live, never by a reload.
+-- Each display gets its own bar strip: the bar, or less when its menu bar is
+-- lower (see config.strip).
+local config = require("config")
+
+local M = {}
+
+-- { did, arr = arrangement id, mon = NSScreen index, w, notch = width left of
+--   the notch (0 = none), menu_bar = menu bar height (0 = unknown), geo }
+M.list = {}
+local subs = {}
+
+-- Re-reads the displays; false when they can't be read right now.
+function M.sync()
+  local screens = {}
+  local f = io.popen("'" .. config.helper .. "' screens 2>/dev/null")
+  for line in (f and f:read("*a") or ""):gmatch("[^\n]+") do
+    local idx, did, w, notch, mb = line:match("^(%d+) (%d+) (%d+) (%d+) ?(%d*)$")
+    if idx then
+      screens[tonumber(did)] = { mon = tonumber(idx), w = tonumber(w), notch = tonumber(notch),
+                                 menu_bar = tonumber(mb) or 0 }
+    end
+  end
+  if f then f:close() end
+  local list = {}
+  local q = sbar.query("displays")
+  for _, x in ipairs(type(q) == "table" and q or {}) do
+    local did = tonumber(x.DirectDisplayID)
+    local sc = screens[did]
+    if sc then
+      list[#list + 1] = { did = did, arr = x["arrangement-id"], mon = sc.mon, w = sc.w, notch = sc.notch,
+                          menu_bar = sc.menu_bar, geo = config.strip(config.strip_height(sc.menu_bar)) }
+    end
+  end
+  if #list == 0 then return false end -- mid-reconfiguration: keep what we have
+  table.sort(list, function(a, b) return a.arr < b.arr end)
+  M.list = list
+  return true
+end
+
+-- fn() runs after every change of the display set (M.list is up to date).
+function M.on_change(fn)
+  subs[#subs + 1] = fn
+end
+
+local function notify()
+  for _, fn in ipairs(subs) do fn() end
+end
+
+-- A newly connected display gets its menu bar window a bit later: re-read
+-- a few times until every menu bar height is known.
+local retries = 0
+local function settle_menu_bars()
+  for _, d in ipairs(M.list) do
+    if d.menu_bar == 0 and retries < 5 then
+      retries = retries + 1
+      sbar.delay(1, function()
+        if M.sync() then notify() end
+        settle_menu_bars()
+      end)
+      return
+    end
+  end
+end
+
+-- display_change also fires spuriously and in bursts, so settle first.
+local events = sbar.add("item", "displays.events", { drawing = false, updates = true })
+local settling = false
+events:subscribe("display_change", function()
+  if settling then return end
+  settling = true
+  sbar.delay(0.5, function()
+    settling = false
+    if M.sync() then
+      retries = 0
+      notify()
+      settle_menu_bars()
+    end
+  end)
+end)
+
+M.sync()
+settle_menu_bars()
+
+return M
