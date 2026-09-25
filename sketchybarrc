@@ -57,9 +57,10 @@ require("items.spaces")
 local status = require("items.status")
 require("items.theme_menu")(status.anchor)
 
--- Geometry (notch, narrowest display) is read at startup. display_change also
--- fires without any real change (on reloads, Sidecar reconnects), so reload
--- only when the geometry actually differs — otherwise the bar reload-loops.
+-- Main screen geometry (notch) is read at startup; other displays coming and
+-- going are handled live by items.spaces. display_change also fires without
+-- any real change (on reloads, Sidecar reconnects), so reload only when the
+-- main screen actually differs — otherwise the bar reload-loops.
 local displays = sbar.add("item", "displays.watcher", { drawing = false, updates = true })
 local geometry_now = config.geometry
 local checking = false

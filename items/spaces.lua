@@ -1,37 +1,130 @@
--- Aerospace workspaces: number + real app icons, only occupied/focused ones.
+-- Aerospace workspaces: number + real app icons, every existing workspace
+-- (occupied, or shown on some display) on every display's bar.
 --
--- One fixed-width item (edge → notch) showing one image (see lib/render.lua):
--- a workspace switch is a single content swap. Images for switching to every
--- other visible workspace are pre-rendered, so switches hit the cache.
+-- Workspaces live on monitors (the aerospace default). Each display has its
+-- own item: the workspace it shows gets the pill (vivid on the focused
+-- display, idle on the others), workspaces living on another display are
+-- dimmed as a whole — so any workspace can be found from any bar — and the
+-- focused one, when it is on another display, gets a dashed outline.
+--
+-- One fixed-width item (edge → notch, or → the status on displays without a
+-- notch) per display showing one image (see lib/render.lua): a workspace
+-- switch is a single content swap. Images for switching to every other
+-- visible workspace are pre-rendered, so switches hit the cache. The layout
+-- is left-aligned, so click/hover ranges are identical on every display.
 local config = require("config")
 local theme = require("lib.theme")
 local render = require("lib.render")
 local color = require("lib.color")
 local regions = require("lib.regions")
 
-local COUNT = 10
-local WIDTH = config.side_width.left
-
 sbar.add("event", "aerospace_workspace_change")
 sbar.add("event", "aerospace_focus_change")
 
 local palette = theme.palette()
 
-local item = sbar.add("item", "spaces", {
-  position = "left",
-  width = WIDTH,
-  icon = { drawing = false },
-  label = { drawing = false },
-  background = { drawing = true, color = 0, image = { drawing = true, scale = config.image_scale } },
-})
+-- Displays ----------------------------------------------------------------------
 
-local state = { focused = 0, hovered = 0, apps = {} }
+-- aerospace names monitors by NSScreen index (monitor-appkit-nsscreen-screens-id),
+-- sketchybar by arrangement id; both map to a CGDirectDisplayID. Displays
+-- come and go (Sidecar): items are added/removed live, never by a reload.
+local MAIN = 1 -- NSScreen index of the main monitor: new workspaces open there
+local displays = {} -- { did, arr = arrangement id, mon = NSScreen index, width, item, hovered }
+local by_did = {}
+local clicked -- mouse.clicked handler, defined below
+
+-- global events are handled once, by an invisible item that never goes away
+local events = sbar.add("item", "spaces.events", { drawing = false, updates = true })
+
+local function sync_displays()
+  local screens = {}
+  local f = io.popen("'" .. config.helper .. "' screens 2>/dev/null")
+  for line in (f and f:read("*a") or ""):gmatch("[^\n]+") do
+    local idx, did, w, notch = line:match("^(%d+) (%d+) (%d+) (%d+)$")
+    if idx then
+      screens[tonumber(did)] = { mon = tonumber(idx), w = tonumber(w), notch = tonumber(notch) }
+    end
+  end
+  if f then f:close() end
+  local list = {}
+  local q = sbar.query("displays")
+  for _, x in ipairs(type(q) == "table" and q or {}) do
+    local sc = screens[tonumber(x.DirectDisplayID)]
+    if sc then
+      list[#list + 1] = { did = tonumber(x.DirectDisplayID), arr = x["arrangement-id"], mon = sc.mon,
+                          width = config.left_width(sc.w, sc.notch) }
+    end
+  end
+  if #list == 0 then return end -- mid-reconfiguration: keep what we have
+  table.sort(list, function(a, b) return a.arr < b.arr end)
+
+  local seen, now = {}, {}
+  for _, x in ipairs(list) do
+    local d = by_did[x.did]
+    if not d then
+      d = { did = x.did, hovered = 0 }
+      d.item = sbar.add("item", "spaces." .. x.did, {
+        position = "left",
+        display = x.arr,
+        width = x.width,
+        icon = { drawing = false },
+        label = { drawing = false },
+        background = { drawing = true, color = 0, image = { drawing = true, scale = config.image_scale } },
+      })
+      d.item:subscribe("mouse.clicked", clicked)
+      by_did[x.did] = d
+    elseif d.arr ~= x.arr or d.width ~= x.width then
+      d.item:set({ display = x.arr, width = x.width })
+    end
+    d.arr, d.mon, d.width = x.arr, x.mon, x.width
+    seen[x.did] = true
+    now[#now + 1] = d
+  end
+  for did, d in pairs(by_did) do
+    if not seen[did] then
+      sbar.remove(d.item.name)
+      by_did[did] = nil
+    end
+  end
+  displays = now
+end
+
+-- State -------------------------------------------------------------------------
+
+-- ws[n] = monitor (NSScreen index) workspace n lives on; shown[mon] = workspace
+-- that monitor shows; focused = focused workspace, on monitor focused_mon.
+local state = { ws = {}, shown = {}, focused = 0, focused_mon = MAIN, apps = {} }
 local ranges = {}
 local seq = 0
 
--- hovered: the workspace under the cursor (ignored when it is the focused one,
--- so the image is shared with the plain state and stays cached)
-local function job_for(focused, hovered)
+local function monitor_of(st, n)
+  return st.ws[n] or MAIN
+end
+
+-- The state right after `aerospace workspace n` (cmd-N / a click): n shows on
+-- the monitor it lives on, which takes focus.
+local function switched(st, n)
+  local mon = monitor_of(st, n)
+  local shown = {}
+  for m, w in pairs(st.shown) do shown[m] = w end
+  shown[mon] = n
+  local ws = {}
+  for w, m in pairs(st.ws) do ws[w] = m end
+  ws[n] = mon
+  return { ws = ws, shown = shown, focused = n, focused_mon = mon, apps = st.apps }
+end
+
+-- Existing workspaces: occupied or shown somewhere, in numeric order.
+local function existing(st)
+  local set, list = {}, {}
+  for n, apps in pairs(st.apps) do if #apps > 0 then set[n] = true end end
+  for _, n in pairs(st.shown) do set[n] = true end
+  for n in pairs(set) do list[#list + 1] = n end
+  table.sort(list)
+  return list
+end
+
+local function job_for(d, st, hovered)
   local j = render.base("spaces", palette)
   j.inset = config.pill.inset
   j.pad = 7              -- pill edge → digit
@@ -42,34 +135,48 @@ local function job_for(focused, hovered)
   j.pill_h = config.pill.height
   j.pill_r = config.pill.radius
   j.pill = color.hex(palette.pill)
+  j.pill_idle = color.hex(palette.pill_idle)
+  j.ring = color.hex(palette.pill)
   j.hover = color.hex(palette.hover)
   j.hover_fg = color.hex(palette.muted)
   j.fg = color.hex(palette.text)
   j.dim = color.hex(palette.dim)
+  j.foreign_alpha = 0.4
   j.font = config.font.text
   j.style = config.font.bold
   j.size = config.font.size
   j.max_slots = 8
   j.workspaces = {}
-  for i = 1, COUNT do
-    local apps = state.apps[i] or {}
-    if #apps > 0 or i == focused then
-      table.insert(j.workspaces, {
-        n = i, focused = i == focused, hovered = (i == hovered and i ~= focused) or nil, apps = apps,
-      })
-    end
+  for _, n in ipairs(existing(st)) do
+    local here = monitor_of(st, n) == d.mon
+    local shown = here and st.shown[d.mon] == n
+    table.insert(j.workspaces, {
+      n = n,
+      focused = shown or nil,
+      idle = (shown and st.focused_mon ~= d.mon) or nil,
+      foreign = (not here) or nil,
+      -- the focused workspace lives on another display: outline it here
+      ring = (not here and n == st.focused) or nil,
+      -- hovered is ignored on the shown workspace, so that image is shared
+      -- with the plain state and stays cached
+      hovered = (n == hovered and not shown) or nil,
+      apps = st.apps[n] or {},
+    })
   end
-  return render.row({ canvas_w = WIDTH, align = "left", islands = { j } })
+  return render.row({ canvas_w = d.width, align = "left", islands = { j } })
 end
 
 -- Every state one step away is rendered ahead: switching to any visible
--- workspace, and hovering any of them, both hit the cache.
+-- workspace (on every display), and hovering any of them, both hit the cache.
 local function prerender()
   local jobs = {}
-  for i = 1, COUNT do
-    if i ~= state.focused and #(state.apps[i] or {}) > 0 then
-      jobs[#jobs + 1] = job_for(i, state.hovered)
-      if i ~= state.hovered then jobs[#jobs + 1] = job_for(state.focused, i) end
+  for _, n in ipairs(existing(state)) do
+    if n ~= state.focused then
+      local st = switched(state, n)
+      for _, d in ipairs(displays) do
+        jobs[#jobs + 1] = job_for(d, st, d.hovered)
+        if n ~= d.hovered then jobs[#jobs + 1] = job_for(d, state, n) end
+      end
     end
   end
   if #jobs > 0 then render.run(jobs) end
@@ -78,10 +185,16 @@ end
 local function show()
   seq = seq + 1
   local my = seq
-  render.run({ job_for(state.focused, state.hovered) }, function(m)
+  local jobs = {}
+  for i, d in ipairs(displays) do jobs[i] = job_for(d, state, d.hovered) end
+  render.run(jobs, function(m)
     if my ~= seq then return end
     ranges = m[1].islands[1].ranges or {}
-    item:set({ background = { image = { string = m[1].out } } })
+    sbar.begin_config()
+    for i, d in ipairs(displays) do
+      d.item:set({ background = { image = { string = m[i].out } } })
+    end
+    sbar.end_config()
     local list = {}
     for _, r in ipairs(ranges) do
       list[#list + 1] = { "space." .. math.floor(r[1]), "left", config.bar.margin + r[2], config.bar.margin + r[3] }
@@ -93,11 +206,12 @@ end
 
 -- Data -------------------------------------------------------------------------
 
-local cmd = "aerospace list-workspaces --focused; "
+local cmd = "aerospace list-workspaces --all --format "
+  .. "'%{workspace}|%{monitor-appkit-nsscreen-screens-id}|%{workspace-is-visible}|%{workspace-is-focused}'; "
   .. "aerospace list-windows --all --format '%{workspace}|%{app-bundle-id}'"
 
 -- A refresh started before the latest workspace event may answer with the
--- previous workspace; its window list is still fine, its focus is not.
+-- previous arrangement; its window list is still fine, the rest is not.
 local switch_seq = 0
 
 local fetching, again = false, false
@@ -108,25 +222,33 @@ local function refresh()
   sbar.exec(cmd, function(out)
     fetching = false
     if type(out) == "string" then
-      local by_ws, seen, first = {}, {}, true
+      local by_ws, seen = {}, {}
+      local ws, shown, focused, focused_mon = {}, {}, nil, nil
       for line in out:gmatch("[^\n]+") do
-        if first then
-          if started == switch_seq then state.focused = tonumber(line) or state.focused end
-          first = false
+        local n, mon, vis, foc = line:match("^(%d+)|(%d+)|(%a+)|(%a+)$")
+        if n then
+          n, mon = tonumber(n), tonumber(mon)
+          ws[n] = mon
+          if vis == "true" then shown[mon] = n end
+          if foc == "true" then focused, focused_mon = n, mon end
         else
-          local ws, bundle = line:match("^(%d+)|(.+)$")
-          ws = tonumber(ws)
-          if ws and bundle and bundle ~= "" then
-            by_ws[ws] = by_ws[ws] or {}
-            seen[ws] = seen[ws] or {}
-            if not seen[ws][bundle] then
-              seen[ws][bundle] = true
-              table.insert(by_ws[ws], bundle)
+          local w, bundle = line:match("^(%d+)|(.+)$")
+          w = tonumber(w)
+          if w and bundle and bundle ~= "" then
+            by_ws[w] = by_ws[w] or {}
+            seen[w] = seen[w] or {}
+            if not seen[w][bundle] then
+              seen[w][bundle] = true
+              table.insert(by_ws[w], bundle)
             end
           end
         end
       end
       state.apps = by_ws
+      if started == switch_seq and focused then
+        state.ws, state.shown = ws, shown
+        state.focused, state.focused_mon = focused, focused_mon
+      end
       show()
     end
     if again then
@@ -138,29 +260,39 @@ end
 
 -- Events -----------------------------------------------------------------------
 
-item:subscribe("aerospace_workspace_change", function(env)
-  -- switch instantly with what we know (pre-rendered), then reconcile
+events:subscribe("aerospace_workspace_change", function(env)
   local f = tonumber(env.AEROSPACE_FOCUSED_WORKSPACE)
   switch_seq = switch_seq + 1
+  -- Switch instantly with what we know (pre-rendered), then reconcile. The
+  -- prediction is `workspace f` (f shows on its own monitor, which takes focus);
+  -- only a summon from another monitor differs, and the refresh fixes that.
   if f and f ~= state.focused then
-    state.focused = f
+    state = switched(state, f)
     show()
   end
   refresh()
 end)
-item:subscribe({ "aerospace_focus_change", "space_windows_change", "front_app_switched", "system_woke" }, refresh)
+events:subscribe({ "aerospace_focus_change", "space_windows_change", "front_app_switched", "system_woke" }, refresh)
 
 sbar.add("event", "bar_hover")
-item:subscribe("bar_hover", function(env)
+events:subscribe("bar_hover", function(env)
   local n = tonumber((env.REGION or ""):match("^space%.(%d+)$")) or 0
-  if n ~= state.hovered then
-    state.hovered = n
-    show()
+  local did = tonumber(env.DISPLAY)
+  local changed = false
+  for _, d in ipairs(displays) do
+    -- without a display id (old daemon) every display shows the hover
+    local h = (did == nil or d.did == did or d.did == 0) and n or 0
+    if h ~= d.hovered then
+      d.hovered = h
+      changed = true
+    end
   end
+  if changed then show() end
 end)
 
--- One click event per action; the workspace is found from the cursor position.
-item:subscribe("mouse.clicked", function(env)
+-- One click event per action; the workspace is found from the cursor position
+-- (ranges are the same on every display).
+clicked = function(env)
   if env.BUTTON == "right" then
     sbar.exec("sketchybar --trigger theme_menu")
     return
@@ -177,7 +309,22 @@ item:subscribe("mouse.clicked", function(env)
       end
     end
   end)
+end
+
+-- Display set changes (Sidecar connect/disconnect): display_change also fires
+-- spuriously and in bursts, so settle first; aerospace rearranges too.
+local settling = false
+events:subscribe("display_change", function()
+  if settling then return end
+  settling = true
+  sbar.delay(0.5, function()
+    settling = false
+    sync_displays()
+    refresh()
+  end)
 end)
+
+sync_displays()
 
 theme.on(function(p)
   palette = p

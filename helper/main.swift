@@ -8,7 +8,9 @@
 //   barhelper measure FAMILY STYLE SIZE TEXT...   text widths in points, one per line
 //   barhelper accent                              print wallpaper accent (0xAARRGGBB)
 //   barhelper layout [next]                       print / switch keyboard layout
-//   barhelper geometry                            "<screen_w> <left_of_notch_w> <right_of_notch_w> <scale> <narrowest_screen_w>"
+//   barhelper geometry                            main screen: "<screen_w> <left_of_notch_w> <right_of_notch_w> <scale>"
+//   barhelper screens                             per display: "<NSScreen index, 1-based> <CGDirectDisplayID> <w> <left_of_notch_w|0>"
+//                                                 (maps aerospace's monitor-appkit-nsscreen-screens-id to displays)
 //   barhelper render JSON                         whole islands as single images, prints JSON meta
 //   barhelper cursor                              global cursor x
 //   barhelper pick 0xAARRGGBB                     native color panel, live preview, prints result
@@ -332,11 +334,12 @@ func appIcon(_ bundle: String) -> NSImage {
   return img
 }
 
-func drawIcon(_ ctx: CGContext, _ img: NSImage, _ rect: CGRect) {
+/// NSImage.draw sets its own opacity (ignores the context alpha): pass it here.
+func drawIcon(_ ctx: CGContext, _ img: NSImage, _ rect: CGRect, alpha: CGFloat = 1) {
   NSGraphicsContext.saveGraphicsState()
   NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
   NSGraphicsContext.current?.imageInterpolation = .high
-  img.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+  img.draw(in: rect, from: .zero, operation: .sourceOver, fraction: alpha)
   NSGraphicsContext.restoreGraphicsState()
 }
 
@@ -373,10 +376,19 @@ func layoutSpaces(_ j: [String: Any]) -> Laid {
   let maxSlots = Int(num(j, "max_slots", 8))
   let wss = j["workspaces"] as? [[String: Any]] ?? []
 
-  struct WS { let n: Int; let focused: Bool; let hovered: Bool; let label: CTLine; let labelW: CGFloat; let apps: [String]; let overflow: Int; let w: CGFloat }
+  let foreignAlpha = num(j, "foreign_alpha", 0.4)
+
+  // focused: the workspace shown on this display (pill; "pill_idle" when the
+  // display isn't the focused one). foreign: lives on another display — the
+  // whole workspace (digit + icons) is dimmed. ring: the focused workspace,
+  // seen from another display — a dashed outline in the accent.
+  struct WS { let n: Int; let focused: Bool; let idle: Bool; let foreign: Bool; let ring: Bool; let hovered: Bool; let label: CTLine; let labelW: CGFloat; let apps: [String]; let overflow: Int; let w: CGFloat }
   var items: [WS] = []
   for ws in wss {
     let n = Int(num(ws, "n")), focused = (ws["focused"] as? Bool) ?? false
+    let idle = focused && ((ws["idle"] as? Bool) ?? false)
+    let foreign = !focused && ((ws["foreign"] as? Bool) ?? false)
+    let ring = !focused && ((ws["ring"] as? Bool) ?? false)
     let hovered = !focused && ((ws["hovered"] as? Bool) ?? false)
     let all = ws["apps"] as? [String] ?? []
     let shown = all.count > maxSlots ? Array(all.prefix(maxSlots - 1)) : all
@@ -385,7 +397,7 @@ func layoutSpaces(_ j: [String: Any]) -> Laid {
     let lw = ceil(lineWidth(label))
     let slots = CGFloat(shown.count + (overflow > 0 ? 1 : 0))
     let w = slots > 0 ? pad + lw + numGap + slots * slot + tail : pad + lw + pad
-    items.append(WS(n: n, focused: focused, hovered: hovered, label: label, labelW: lw, apps: shown, overflow: overflow, w: w))
+    items.append(WS(n: n, focused: focused, idle: idle, foreign: foreign, ring: ring, hovered: hovered, label: label, labelW: lw, apps: shown, overflow: overflow, w: w))
   }
   let width = items.reduce(inset) { $0 + $1.w + inset }
   var ranges: [[CGFloat]] = []
@@ -401,18 +413,33 @@ func layoutSpaces(_ j: [String: Any]) -> Laid {
     for ws in items {
       if ws.focused || ws.hovered {
         let pill = CGRect(x: x, y: (h - pillH) / 2, width: ws.w, height: pillH)
-        ctx.addPath(squircle(pill, pillR)); ctx.setFillColor(col(j, ws.focused ? "pill" : "hover")); ctx.fillPath()
+        ctx.addPath(squircle(pill, pillR))
+        ctx.setFillColor(col(j, ws.focused ? (ws.idle ? "pill_idle" : "pill") : "hover")); ctx.fillPath()
       }
+      if ws.ring {
+        let lw = num(j, "ring_w", 1.25)
+        let pill = CGRect(x: x, y: (h - pillH) / 2, width: ws.w, height: pillH).insetBy(dx: lw / 2, dy: lw / 2)
+        ctx.saveGState()
+        ctx.addPath(squircle(pill, max(0, pillR - lw / 2)))
+        ctx.setStrokeColor(col(j, "ring")); ctx.setLineWidth(lw)
+        ctx.setLineDash(phase: 0, lengths: [3, 2.5])
+        ctx.strokePath()
+        ctx.restoreGState()
+      }
+      ctx.saveGState()
+      if ws.foreign { ctx.setAlpha(foreignAlpha) }
       drawLine(ctx, ws.label, x: x + pad, mid: mid, f)
       var ix = x + pad + ws.labelW + numGap
       for app in ws.apps {
-        drawIcon(ctx, appIcon(app), CGRect(x: ix + (slot - iconSize) / 2, y: (h - iconSize) / 2, width: iconSize, height: iconSize))
+        drawIcon(ctx, appIcon(app), CGRect(x: ix + (slot - iconSize) / 2, y: (h - iconSize) / 2, width: iconSize, height: iconSize),
+                 alpha: ws.foreign ? foreignAlpha : 1)
         ix += slot
       }
       if ws.overflow > 0 {
         let l = textLine("+\(ws.overflow)", small, col(j, "dim"))
         drawLine(ctx, l, x: ix + (slot - lineWidth(l)) / 2, mid: mid, small)
       }
+      ctx.restoreGState()
       x += ws.w + inset
     }
   }, ranges: ranges)
@@ -557,6 +584,10 @@ func normalizeAccent(_ c: NSColor) -> String {
   return "0xffc9ced6"
 }
 
+func displayID(_ s: NSScreen) -> CGDirectDisplayID {
+  (s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+}
+
 /// The bar is drawn on every display, so positions are relative to the screen
 /// under the cursor: returns (x from that screen's left edge, its width).
 func cursorOnScreen() -> (x: CGFloat, width: CGFloat) {
@@ -610,6 +641,7 @@ final class Daemon {
   var strip: CGFloat = 32
   var regionsStamp: Date?
   var hovered = ""
+  var hoveredDisplay = ""
 
   func loadRegions() {
     let stamp = (try? FileManager.default.attributesOfItem(atPath: regionsPath))?[.modificationDate] as? Date
@@ -629,9 +661,10 @@ final class Daemon {
 
   func checkHover() {
     let p = NSEvent.mouseLocation
-    var name = ""
+    var name = "", display = ""
     if let screen = NSScreen.screens.first(where: { NSMouseInRect(p, $0.frame, false) }),
        screen.frame.maxY - p.y <= strip {
+      display = String(displayID(screen))
       loadRegions()
       let fromLeft = p.x - screen.frame.minX, fromRight = screen.frame.maxX - p.x
       name = regions.first {
@@ -639,9 +672,12 @@ final class Daemon {
         return d >= $0.d0 && d < $0.d1
       }?.name ?? ""
     }
-    guard name != hovered else { return }
+    if name == "" { display = "" }
+    guard name != hovered || display != hoveredDisplay else { return }
     hovered = name
-    triggerAsync("bar_hover", ["REGION": name])
+    hoveredDisplay = display
+    // DISPLAY: CGDirectDisplayID of the screen under the cursor ("" = none)
+    triggerAsync("bar_hover", ["REGION": name, "DISPLAY": display])
   }
 
   var parentWatch: DispatchSourceProcess?
@@ -790,14 +826,18 @@ case "cursor":
   print(Int(c.x), Int(c.width))
 case "layout": if args.count > 1, args[1] == "next" { nextLayout() } else { print(layoutCode()) }
 case "geometry":
-  let s = NSScreen.screens.first { $0.auxiliaryTopLeftArea != nil } ?? NSScreen.main!
+  // the main screen (menu bar) — other displays don't affect the geometry
+  let s = NSScreen.screens.first!
   let w = s.frame.width
   let l = s.auxiliaryTopLeftArea?.width ?? w / 2
   let r = s.auxiliaryTopRightArea?.width ?? w / 2
-  let narrowest = NSScreen.screens.map(\.frame.width).min() ?? w
-  print(Int(w), Int(l), Int(r), backing, Int(narrowest))
+  print(Int(w), Int(l), Int(r), backing)
+case "screens":
+  for (i, s) in NSScreen.screens.enumerated() {
+    print(i + 1, displayID(s), Int(s.frame.width), Int(s.auxiliaryTopLeftArea?.width ?? 0))
+  }
 case "pick": Picker().run(args.count > 1 ? args[1] : "0xff8ec8ff")
 default:
-  FileHandle.standardError.write("usage: barhelper daemon|shape|icon|battery|measure|accent|layout|geometry|pick\n".data(using: .utf8)!)
+  FileHandle.standardError.write("usage: barhelper daemon|shape|icon|battery|measure|accent|layout|geometry|screens|render|cursor|pick\n".data(using: .utf8)!)
   exit(1)
 }
