@@ -43,9 +43,11 @@ local tip = sbar.add("item", "status.tip", {
 
 local state = {
   code = "EN",
+  -- assume a battery until pmset says otherwise (no shift at startup on laptops)
+  has_battery = true,
   level = 100, charge = 0, low = false, status = "",
 }
-local islands = {} -- x ranges from the last render: input, battery, clock
+local islands = {} -- name -> { x0, x1 } from the last render
 local seq = 0
 
 -- Wording and title case as in the macOS battery menu.
@@ -65,11 +67,11 @@ local function text(str, style, c, extra)
 end
 
 local function write_regions()
-  local b = islands[2]
-  if not b then return end
   local f = io.open(config.state .. "/regions", "w")
   if not f then return end
-  f:write(string.format("strip %d\nbattery %g %g\n", config.bar.height, ORIGIN + b.x0, ORIGIN + b.x1))
+  f:write(string.format("strip %d\n", config.bar.height))
+  local b = islands.battery
+  if b then f:write(string.format("battery %g %g\n", ORIGIN + b.x0, ORIGIN + b.x1)) end
   f:close()
 end
 
@@ -96,17 +98,24 @@ local function show()
     text(os.date("%H:%M"), font.bold, palette.text, { min_text = "00:00", align = "right" }),
   }
 
-  local row = render.row({ canvas_w = WIDTH, align = "right", gap = config.island.gap,
-    islands = { input, battery, clock } })
+  local names = { "input", "clock" }
+  local parts = { input, clock }
+  if state.has_battery then
+    table.insert(names, 2, "battery")
+    table.insert(parts, 2, battery)
+  end
+  local row = render.row({ canvas_w = WIDTH, align = "right", gap = config.island.gap, islands = parts })
 
   render.run({ row }, function(m)
     if my ~= seq then return end
-    islands = m[1].islands
+    islands = {}
+    for i, name in ipairs(names) do islands[name] = m[1].islands[i] end
     item:set({ background = { image = { string = m[1].out } } })
     write_regions()
 
     -- tooltip for the current battery state (rendered ahead of any hover)
-    local b = islands[2]
+    local b = islands.battery
+    if not b then return end
     local bubble = render.base("island", palette)
     bubble.fill = color.hex(palette.popup)
     bubble.pad_l, bubble.pad_r = 10, 10
@@ -133,6 +142,16 @@ end
 local function update_battery()
   sbar.exec("pmset -g batt", function(out)
     if type(out) ~= "string" then return end
+    -- desktop Macs have no internal battery: drop the island entirely
+    local has_battery = out:find("InternalBattery") ~= nil
+    if not has_battery then
+      if state.has_battery then
+        state.has_battery = false
+        show()
+      end
+      return
+    end
+    state.has_battery = true
     local ac = out:find("AC Power") ~= nil
     local level = tonumber(out:match("(%d+)%%")) or state.level
     local charging = out:find(";%s*charging") ~= nil or out:find("finishing charge") ~= nil
@@ -163,7 +182,7 @@ item:subscribe("layout_change", function(env)
 end)
 
 item:subscribe("bar_hover", function(env)
-  item:set({ popup = { drawing = env.REGION == "battery" } })
+  item:set({ popup = { drawing = env.REGION == "battery" and state.has_battery } })
 end)
 
 item:subscribe("mouse.clicked", function(env)
@@ -175,10 +194,10 @@ item:subscribe("mouse.clicked", function(env)
     local x = tonumber(tostring(out):match("%-?%d+"))
     if not x then return end
     x = x - ORIGIN
-    local function inside(i) return islands[i] and x >= islands[i].x0 and x < islands[i].x1 end
-    if inside(1) then
+    local function inside(name) return islands[name] and x >= islands[name].x0 and x < islands[name].x1 end
+    if inside("input") then
       sbar.exec("'" .. config.helper .. "' layout next")
-    elseif inside(3) then
+    elseif inside("clock") then
       sbar.exec("open -a Calendar")
     end
   end)
