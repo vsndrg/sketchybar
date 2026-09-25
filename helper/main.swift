@@ -630,7 +630,29 @@ final class Daemon {
     triggerAsync("bar_hover", ["REGION": name])
   }
 
+  var parentWatch: DispatchSourceProcess?
+
+  /// Exit together with sketchybar (the daemon is detached via nohup, so it
+  /// would otherwise keep capturing the wallpaper and spawning failing
+  /// triggers after the bar is stopped).
+  func exitWithSketchybar() {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+    p.arguments = ["-x", "sketchybar"]
+    let out = Pipe()
+    p.standardOutput = out
+    try? p.run()
+    p.waitUntilExit()
+    let text = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    guard let pid = text.split(separator: "\n").compactMap({ pid_t($0) }).first else { exit(0) }
+    let src = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .main)
+    src.setEventHandler { exit(0) }
+    src.resume()
+    parentWatch = src
+  }
+
   func run() {
+    exitWithSketchybar()
     let dnc = DistributedNotificationCenter.default()
     dnc.addObserver(forName: NSNotification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String),
                     object: nil, queue: .main) { _ in self.emitLayout() }
