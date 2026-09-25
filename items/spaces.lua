@@ -79,17 +79,22 @@ end
 local cmd = "aerospace list-workspaces --focused; "
   .. "aerospace list-windows --all --format '%{workspace}|%{app-bundle-id}'"
 
+-- A refresh started before the latest workspace event may answer with the
+-- previous workspace; its window list is still fine, its focus is not.
+local switch_seq = 0
+
 local fetching, again = false, false
 local function refresh()
   if fetching then again = true return end
   fetching = true
+  local started = switch_seq
   sbar.exec(cmd, function(out)
     fetching = false
     if type(out) == "string" then
       local by_ws, seen, first = {}, {}, true
       for line in out:gmatch("[^\n]+") do
         if first then
-          state.focused = tonumber(line) or state.focused
+          if started == switch_seq then state.focused = tonumber(line) or state.focused end
           first = false
         else
           local ws, bundle = line:match("^(%d+)|(.+)$")
@@ -119,6 +124,7 @@ end
 item:subscribe("aerospace_workspace_change", function(env)
   -- switch instantly with what we know (pre-rendered), then reconcile
   local f = tonumber(env.AEROSPACE_FOCUSED_WORKSPACE)
+  switch_seq = switch_seq + 1
   if f and f ~= state.focused then
     state.focused = f
     show()
