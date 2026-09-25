@@ -58,3 +58,5 @@ Open issues:
 1. Design bar + workspace logic for multiple monitors (each bar shows its own monitor's workspaces;
    workspace 11 on Sidecar is currently not shown; bar lists are global).
 2. Fix vertical symmetry: gaps between bar and windows and at the screen edges.
+3. Clock lags behind real time. Likely cause: `items/status.lua` checks the minute on a 10s
+   `routine` (up to ~10s late) + render latency; align the update to the minute boundary.
