@@ -168,8 +168,7 @@ each live on some monitor), plus:
 1. (done 2026-09-26) F6 doesn't turn off the second monitor.
 2. Battery glyph: when the fill edge crosses the digits, they become unreadable (digits are knocked
    out of the fill and solid over the empty part — see `drawBattery` in `helper/main.swift`).
-3. Performance review — run as a SEPARATE agent (Agent tool): bar render/refresh latency, helper
-   daemon CPU, AeroSpace switch timing, prerender volume with several displays.
-4. Bug test — run as a SEPARATE agent: exercise the multi-monitor spec end to end (cmd-N, cmd-alt-N,
-   cmd-shift-N/h/l, clicks/hover per display, empty/new workspaces, display disconnect/reconnect),
-   themes, battery tooltip; report findings before fixing.
+3. (done 2026-09-26) Performance review + 4. bug test (multi-monitor spec, sleep/Sidecar) — both
+   report-only. Findings + agreed fix order with checkboxes: `docs/review-2026-09-26.md` (evidence
+   and probe tools in `~/.local/state/sketchybar/review-2026-09-26/`). NEXT: fix plan step 1
+   (F6 30 s stall = exit(0) in willSleep, etc.), tick checkboxes there as items land.
