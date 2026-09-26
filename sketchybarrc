@@ -62,20 +62,34 @@ require("items.theme_menu")
 -- any real change (on reloads, Sidecar reconnects), so reload only when the
 -- main screen actually differs — otherwise the bar reload-loops.
 -- While asleep (lid closed) macOS swaps in a virtual 1920×960 @1x display:
--- ignored, the geometry is checked again after wake.
+-- ignored, the geometry is checked again after wake. Closing the lid on the
+-- charger swaps the main screen (iPad, then the virtual one) a moment BEFORE
+-- system_will_sleep, so a change must still hold 2 s later: a reload then
+-- would restart the helper daemon just as it has to remember the iPad.
 local displays = sbar.add("item", "displays.watcher", { drawing = false, updates = true })
 local geometry_now = config.geometry
 local checking, asleep = false, false
-local function check_geometry()
+local function geometry(delay, f)
+  sbar.delay(delay, function()
+    sbar.exec("'" .. config.helper .. "' geometry", function(out)
+      f(type(out) == "string" and out:gsub("%s+$", "") or "")
+    end)
+  end)
+end
+local check_geometry
+function check_geometry()
   if checking then return end
   checking = true
-  sbar.delay(1.0, function()
-    sbar.exec("'" .. config.helper .. "' geometry", function(out)
+  geometry(1.0, function(g)
+    if asleep or g == "" or g == geometry_now then checking = false; return end
+    geometry(2.0, function(again)
       checking = false
-      local g = type(out) == "string" and out:gsub("%s+$", "") or ""
-      if not asleep and g ~= "" and g ~= geometry_now then
+      if asleep then return end
+      if again == g then
         geometry_now = g
         sbar.exec("sketchybar --reload")
+      elseif again ~= geometry_now then
+        check_geometry() -- still moving
       end
     end)
   end)
