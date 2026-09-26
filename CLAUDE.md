@@ -40,8 +40,10 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   monitor re-homes it): rearrange skips it, its monitor's stub picks it up. Happens after sleep: with no
   displays AeroSpace rearranges everything, main can come back showing the iPad's workspace.
 - F6 (Karabiner `fn_function_keys`) → `barhelper sleep`: ends Sidecar sessions (private SidecarCore
-  `SidecarDisplayManager`, else the iPad stays lit), sleeps, stays alive and reconnects the same
-  devices after wake + unlock. Log: `~/.local/state/sketchybar/sleep.log`.
+  `SidecarDisplayManager`, else the iPad stays lit), sleeps (reconnects itself only if sleep fails).
+  Reconnect after wake + unlock lives in the daemon (`SidecarReconnect`), so it also covers lid close /
+  idle sleep: iPads connected at willSleep + ones lost in the 30s before it (the lid may drop the iPad
+  first). Log: `~/.local/state/sketchybar/sleep.log`.
 - AeroSpace moves windows via AX, per app, async; no atomic switch possible without SIP. Patches reorder/wait.
 - AeroSpace forgets window→workspace on restart; `build.sh --install` snapshots and restores it.
 - AeroSpace build is signed with local cert `aerospace-local-codesign` (login keychain) so the Accessibility
