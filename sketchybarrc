@@ -61,22 +61,30 @@ require("items.theme_menu")
 -- going are handled live by items.spaces. display_change also fires without
 -- any real change (on reloads, Sidecar reconnects), so reload only when the
 -- main screen actually differs — otherwise the bar reload-loops.
+-- While asleep (lid closed) macOS swaps in a virtual 1920×960 @1x display:
+-- ignored, the geometry is checked again after wake.
 local displays = sbar.add("item", "displays.watcher", { drawing = false, updates = true })
 local geometry_now = config.geometry
-local checking = false
-displays:subscribe("display_change", function()
+local checking, asleep = false, false
+local function check_geometry()
   if checking then return end
   checking = true
   sbar.delay(1.0, function()
     sbar.exec("'" .. config.helper .. "' geometry", function(out)
       checking = false
       local g = type(out) == "string" and out:gsub("%s+$", "") or ""
-      if g ~= "" and g ~= geometry_now then
+      if not asleep and g ~= "" and g ~= geometry_now then
         geometry_now = g
         sbar.exec("sketchybar --reload")
       end
     end)
   end)
+end
+displays:subscribe("display_change", check_geometry)
+displays:subscribe("system_will_sleep", function() asleep = true end)
+displays:subscribe("system_woke", function()
+  asleep = false
+  check_geometry()
 end)
 
 sbar.end_config()

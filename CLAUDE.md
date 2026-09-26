@@ -25,7 +25,10 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   `sbar.query("displays")` → arrangement id (shared list: `lib/displays.lua`). Status (right) is also one
   item per display (`status.<did>`, same content), width capped
   (`config.status_max`); spaces width per display (`config.left_width`). sketchybarrc reloads only
-  when the MAIN screen geometry changes. Click/hover ranges per display (device glyphs differ).
+  when the MAIN screen geometry changes, never while asleep: with the lid closed macOS swaps in a
+  virtual 1920×960 @1x display (the reload it caused, plus the one back after wake, left the main
+  bar stale: sketchybar skips drawing a bar whose display has no space, sid 0, and a reload +
+  Sidecar reconnect hit that window). Re-checked on system_woke. Click/hover ranges per display (device glyphs differ).
 - AeroSpace: a hidden workspace remembers its monitor by the monitor's top-left point
   (`assignedMonitorPoint`); a missing monitor maps to the nearest one → reconnect returns them natively.
   BUT Sidecar disconnect makes its windows "die" briefly → AeroSpace's closed-windows cache
