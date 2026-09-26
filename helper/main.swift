@@ -1397,11 +1397,19 @@ final class Sidecar {
 /// going to sleep and connects them again after wake, once the screen is
 /// unlocked (the lock screen isn't worth mirroring). Closing the lid may drop
 /// the iPad just before the sleep notification, so ones lost moments earlier
-/// count too. Log: ~/.local/state/sketchybar/sleep.log.
+/// count too. Opening the lid changes the main screen, so sketchybarrc restarts
+/// the daemon right after wake: the list is kept in a file and a fresh daemon
+/// picks it up. Log: ~/.local/state/sketchybar/sleep.log.
 final class SidecarReconnect {
+  static let wantPath = NSHomeDirectory() + "/.local/state/sketchybar/sidecar-reconnect"
   let sidecar = Sidecar()
   var connected = Set<String>(), lost: [String: Date] = [:]
-  var want = Set<String>()  // to connect after wake
+  var want = Set<String>() {  // to connect after wake
+    didSet {
+      if want.isEmpty { try? FileManager.default.removeItem(atPath: Self.wantPath) }
+      else { try? want.sorted().joined(separator: "\n").write(toFile: Self.wantPath, atomically: true, encoding: .utf8) }
+    }
+  }
   var running = false, attempts = 0
   var done: () -> Void = {}
 
@@ -1426,6 +1434,16 @@ final class SidecarReconnect {
     DistributedNotificationCenter.default().addObserver(
       forName: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main
     ) { _ in if !self.want.isEmpty && !self.running { sleepLogLine("unlocked"); self.start() } }
+    // left by a daemon that went to sleep (a day old = something went wrong, drop it)
+    let attrs = try? FileManager.default.attributesOfItem(atPath: Self.wantPath)
+    if let date = attrs?[.modificationDate] as? Date, Date().timeIntervalSince(date) < 86400,
+       let text = try? String(contentsOfFile: Self.wantPath, encoding: .utf8) {
+      want = Set(text.split(separator: "\n").map(String.init))
+      sleepLogLine("daemon started, pending reconnect: \(want.sorted())")
+      didWake()
+    } else {
+      want = []
+    }
   }
 
   func willSleep() {

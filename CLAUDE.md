@@ -43,7 +43,9 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   `SidecarDisplayManager`, else the iPad stays lit), sleeps (reconnects itself only if sleep fails).
   Reconnect after wake + unlock lives in the daemon (`SidecarReconnect`), so it also covers lid close /
   idle sleep: iPads connected at willSleep + ones lost in the 30s before it (the lid may drop the iPad
-  first). Log: `~/.local/state/sketchybar/sleep.log`.
+  first). Opening the lid changes the main screen → sketchybarrc restarts the daemon right after wake
+  (before didWake reaches it), so the list lives in `~/.local/state/sketchybar/sidecar-reconnect` and a
+  fresh daemon picks it up. Log: `~/.local/state/sketchybar/sleep.log`.
 - AeroSpace moves windows via AX, per app, async; no atomic switch possible without SIP. Patches reorder/wait.
 - AeroSpace forgets window→workspace on restart; `build.sh --install` snapshots and restores it.
 - AeroSpace build is signed with local cert `aerospace-local-codesign` (login keychain) so the Accessibility
