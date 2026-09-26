@@ -68,21 +68,52 @@ function M.job(j)
   return j
 end
 
--- Renders missing jobs in one helper process, then cb(list of meta).
+local inflight = {} -- out path -> true while a helper process renders it
+local waiting = {} -- runs waiting for images another run is rendering
+
+-- A render finished: runs waiting on it may be complete now.
+local function settle()
+  local still = {}
+  for _, w in ipairs(waiting) do
+    if not w() then still[#still + 1] = w end
+  end
+  waiting = still
+end
+
+-- Renders missing jobs in one helper process, then cb(list of meta). An image
+-- already being rendered (the same prerender batch comes from several show()s
+-- per switch) isn't rendered again: the run waits for it instead.
 function M.run(jobs, cb)
-  local todo = {}
+  local todo, pending = {}, false
   for _, j in ipairs(jobs) do
-    if not (meta[j.out] and exists(j.out)) then todo[#todo + 1] = j end
+    if not (meta[j.out] and exists(j.out)) then
+      if inflight[j.out] then
+        pending = true
+      else
+        inflight[j.out] = true
+        todo[#todo + 1] = j
+      end
+    end
   end
   local now = os.time()
   for _, j in ipairs(jobs) do used[j.out] = now end
-  local function done()
-    if not cb then return end
-    local out = {}
-    for i, j in ipairs(jobs) do out[i] = meta[j.out] end
-    cb(out)
+  -- true once finished: cb called, or a render failed (keep the old image)
+  local function complete()
+    for _, j in ipairs(jobs) do
+      if not meta[j.out] then return not inflight[j.out] end
+    end
+    if cb then
+      local out = {}
+      for i, j in ipairs(jobs) do out[i] = meta[j.out] end
+      cb(out)
+    end
+    return true
   end
-  if #todo == 0 then return done() end
+  if cb and (pending or #todo > 0) then waiting[#waiting + 1] = complete end
+  if #todo == 0 then
+    if not pending then complete() end
+    return
+  end
 
   local json = encode(todo):gsub("'", "'\\''")
   sbar.exec("'" .. config.helper .. "' render '" .. json .. "'", function(result)
@@ -91,10 +122,8 @@ function M.run(jobs, cb)
         if m.out then meta[m.out] = m end
       end
     end
-    for _, j in ipairs(jobs) do
-      if not meta[j.out] then return end -- render failed; keep the old image
-    end
-    done()
+    for _, j in ipairs(todo) do inflight[j.out] = nil end
+    settle()
   end)
 end
 

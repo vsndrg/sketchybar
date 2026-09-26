@@ -163,9 +163,14 @@ end
 
 -- Every state one step away is rendered ahead: switching to any visible
 -- workspace (on every display), and hovering any of them, both hit the cache.
+-- Also a switch to an empty workspace cmd-N opens (1–10, see aerospace.toml),
+-- which isn't on the bar yet. Pinned: after half an hour without a switch the
+-- cache gc would drop them all, and the next switch would render on the spot.
+local KEYED = 10
 local function prerender()
-  local jobs = {}
+  local jobs, set = {}, {}
   for _, n in ipairs(existing(state)) do
+    set[n] = true
     if n ~= state.focused then
       local st = switched(state, n)
       for _, d in ipairs(displays) do
@@ -174,6 +179,15 @@ local function prerender()
       end
     end
   end
+  for n = 1, KEYED do
+    if not set[n] and n ~= state.focused then
+      local st = switched(state, n)
+      for _, d in ipairs(displays) do jobs[#jobs + 1] = job_for(d, st, d.hovered) end
+    end
+  end
+  local paths = {}
+  for i, j in ipairs(jobs) do paths[i] = j.out end
+  render.pin("spaces", paths)
   if #jobs > 0 then render.run(jobs) end
 end
 
