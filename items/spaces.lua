@@ -300,10 +300,7 @@ end)
 -- One click event per action; the workspace is found from the cursor position
 -- (ranges are in the bar's units, scaled on displays with a shorter strip).
 clicked = function(env)
-  if env.BUTTON == "right" then
-    sbar.exec("sketchybar --trigger theme_menu")
-    return
-  end
+  if env.BUTTON ~= "left" then return end -- a right click opens the menu (helper daemon)
   -- "<x on the screen under the cursor> <that screen's width> <its display id>"
   sbar.exec("'" .. config.helper .. "' cursor", function(out)
     local x, did = tostring(out):match("^%s*(%-?%d+)%s+%d+%s*(%d*)")

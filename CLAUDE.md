@@ -54,7 +54,15 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   a popup of a single-display item lands at -9999 elsewhere. So the battery tooltip is the helper
   daemon's own window (`Tooltips`): Lua renders it per display and lists it in
   `~/.local/state/sketchybar/tooltips`, the daemon shows it on hover (no process spawn). The theme menu
-  (right click) is still a sketchybar popup → appears on the focused display.
+  likewise (`Menu`, `items/theme_menu.lua`, `~/.local/state/sketchybar/menu` with hit rects): the
+  daemon opens it on a right click ANYWHERE on the bar (global monitor; the click's target window
+  must be sketchybar's), fires `menu_select ID=…`, stays open (re-renders in place), closes on a
+  click elsewhere / app activation. A click on another display makes AeroSpace focus that display
+  (native leftMouseUp handler) → activation right after a menu click is ignored. Hover = a
+  highlight layer over the image (no re-render). Shadow drawn into the image (a non-key window's
+  system shadow is invisible); fill L 0.34 (`palette.menu`) — at the popup's L 0.25 it matched
+  WezTerm's background and blended in (user briefly found it too much, then kept it).
+  Pills / hover highlights never touch: 6pt apart (`widths.sep`), as in the first row.
 - SbarLua ignores SIGCHLD except around its `os.execute` (default for system()): a `sbar.exec` child
   exiting then stays a zombie, and with a zombie `io.popen`'s pclose can hang forever (XNU wait4) →
   the whole bar froze. → No `os.execute` after `require("sketchybar")` (use `lib/sh.lua` at startup),
@@ -90,7 +98,9 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   watches `~/Library/Preferences` → `icon_theme_change`, theme is part of the islands' cache key.
   Lag 5–10s = cfprefsd flushing .GlobalPreferences.plist; user accepted it (no polling). AppKit's
   `NSWorkspaceIconAppearanceConfigurationDidChangeNotification` didn't reach a test process.
-- Text: SF Pro Text, optically centered on cap height by the helper. Battery tooltip wording = macOS menu.
+- Text: SF Pro Text, optically centered on cap height by the helper. Weight picked in the menu
+  (Regular/Medium/Semibold = primary text, secondary one step lighter; `config.font.weights`),
+  saved in the theme state. User found Semibold too heavy → Medium. Battery tooltip wording = macOS menu.
 - Clock: the daemon fires `minute_change` on every minute boundary (one timer, re-aligned on wake /
   clock change); the next minute's image is pre-rendered, so the swap is a cache hit. Measured on
   screen: +55ms after :00. The 60s routine (battery) is the clock's fallback.

@@ -1,6 +1,7 @@
 // barhelper — native side of the bar.
 //
-//   barhelper daemon                              watch layout / wallpaper, fire sketchybar events
+//   barhelper daemon                              watch layout / wallpaper, fire sketchybar events,
+//                                                 show the theme menu on a right click on the bar
 //   barhelper shape W H R FILL STROKE SW OUT [...] continuous-corner (squircle) PNGs, 7 args each
 //   barhelper icon SIZE BUNDLE OUT [...]          app icon PNGs rendered at exact pixel size
 //   barhelper battery PCT STATE COLOR OUT         battery with the level printed inside
@@ -512,8 +513,57 @@ func layoutIsland(_ j: [String: Any]) -> Laid {
   })
 }
 
+/// The theme menu: Lua lays it out (entries with rects in pt from the top-left),
+/// this only draws it. Entries: "text" (centered) or "swatch" (a color dot);
+/// a selected text entry sits on a pill, a selected swatch gets a white dot.
+/// It floats over windows, so it casts a shadow like a system menu (a tight
+/// contact one and a soft wide one) into a margin of `m` around it; a
+/// non-key window's own shadow is too faint to separate it from them.
+func layoutMenu(_ j: [String: Any]) -> Laid {
+  let w = num(j, "w"), h = num(j, "h"), m = num(j, "m")
+  let entries = j["entries"] as? [[String: Any]] ?? []
+  return Laid(w: w + 2 * m, draw: { ctx in
+    ctx.translateBy(x: m, y: m)
+    let body = squircle(CGRect(x: 0, y: 0, width: w, height: h), num(j, "r"))
+    for (blur, dy, alpha) in [(CGFloat(22), CGFloat(-8), CGFloat(0.6)), (3, -1, 0.6)] {
+      ctx.saveGState()
+      ctx.setShadow(offset: CGSize(width: 0, height: dy), blur: blur, color: CGColor(gray: 0, alpha: alpha))
+      ctx.addPath(body); ctx.setFillColor(col(j, "fill")); ctx.fillPath()
+      ctx.restoreGState()
+    }
+    islandBackground(ctx, j, w: w, h: h)
+    for e in entries {
+      let r = CGRect(x: num(e, "x"), y: h - num(e, "y") - num(e, "h"), width: num(e, "w"), height: num(e, "h"))
+      let selected = (e["selected"] as? Bool) ?? false
+      if str(e, "type") == "swatch" {
+        let d = num(e, "d")
+        let dot = CGRect(x: r.midX - d / 2, y: r.midY - d / 2, width: d, height: d)
+        ctx.addEllipse(in: dot); ctx.setFillColor(col(e, "color")); ctx.fillPath()
+        ctx.addEllipse(in: dot.insetBy(dx: 0.5, dy: 0.5))
+        ctx.setStrokeColor(col(e, "ring")); ctx.setLineWidth(1); ctx.strokePath()
+        if selected {
+          let m = num(e, "mark")
+          ctx.addEllipse(in: CGRect(x: r.midX - m / 2, y: r.midY - m / 2, width: m, height: m))
+          ctx.setFillColor(CGColor(gray: 1, alpha: 1)); ctx.fillPath()
+        }
+        continue
+      }
+      if selected {
+        ctx.addPath(squircle(r, num(j, "pill_r"))); ctx.setFillColor(col(j, "pill")); ctx.fillPath()
+      }
+      let f = font(str(e, "font"), str(e, "style"), num(e, "size"))
+      let l = textLine(str(e, "text"), f, col(e, "color"))
+      drawLine(ctx, l, x: r.midX - lineWidth(l) / 2, mid: r.midY, f)
+    }
+  })
+}
+
 func layoutJob(_ j: [String: Any]) -> Laid {
-  str(j, "kind") == "spaces" ? layoutSpaces(j) : layoutIsland(j)
+  switch str(j, "kind") {
+  case "spaces": return layoutSpaces(j)
+  case "menu": return layoutMenu(j)
+  default: return layoutIsland(j)
+  }
 }
 
 /// A fixed-size canvas holding one or more islands. The item showing it never
@@ -843,6 +893,208 @@ final class Tooltips {
   }
 }
 
+// MARK: - Menu
+
+/// The theme menu, opened by a right click anywhere on the bar, as the daemon's
+/// own window on the display that was clicked (a sketchybar popup only appears
+/// on the display with the focused window). Lua renders it per display and
+/// lists it in ~/.local/state/sketchybar/menu:
+///   "menu <display> <right> <top> <hover_r> <hover_color> <png>"
+///       image's right / top edge in pt from the screen's; the hover highlight
+///   "hit <display> <id> <x0> <y0> <x1> <y1>"  clickable entries, pt from the image's top-left
+/// The entry under the cursor gets a highlight layer over the image (no
+/// re-render). A click on an entry fires `menu_select ID=<id>` and leaves the
+/// menu open (the new state re-renders it in place); a click anywhere else closes it.
+final class Menu {
+  let path = NSHomeDirectory() + "/.local/state/sketchybar/menu"
+  var menus: [String: (right: CGFloat, top: CGFloat, hoverR: CGFloat, hover: CGColor, png: String)] = [:] // display
+  var hits: [String: [(id: String, rect: CGRect)]] = [:]
+  var stamp: Date?
+  var panel: NSPanel?
+  var shown = "" // display the menu is open on
+  var clicked = Date.distantPast // last click on an entry
+  let image = CALayer() // the menu's image, placed in the window (which is clipped to the screen)
+  let highlight = CALayer() // in the image's coordinates
+  var hovered = "" // entry id under the cursor
+  var watcher: DispatchSourceFileSystemObject?
+
+  var isOpen: Bool { !shown.isEmpty }
+
+  func load() -> Bool {
+    let st = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+    guard st != stamp else { return false }
+    stamp = st
+    menus = [:]
+    hits = [:]
+    let text = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+    for line in text.split(separator: "\n") {
+      let f = line.split(separator: " ", maxSplits: 6)
+      if f.count == 7, f[0] == "menu", let r = Double(f[2]), let t = Double(f[3]), let hr = Double(f[4]) {
+        menus[String(f[1])] = (CGFloat(r), CGFloat(t), CGFloat(hr), parseColor(String(f[5])), String(f[6]))
+      } else if f.count == 7, f[0] == "hit", let x0 = Double(f[3]), let y0 = Double(f[4]),
+                let x1 = Double(f[5]), let y1 = Double(f[6]) {
+        hits[String(f[1]), default: []].append((String(f[2]), CGRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0)))
+      }
+    }
+    return true
+  }
+
+  func toggle(on display: String) {
+    if shown == display { hide() } else { show(display) }
+  }
+
+  func show(_ display: String) {
+    _ = load()
+    guard let e = menus[display],
+          let screen = NSScreen.screens.first(where: { String(displayID($0)) == display }),
+          let img = NSImage(contentsOfFile: e.png)?.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+      hide()
+      return
+    }
+    // rendered at the backing scale (times the strip's scale), shown 1:1
+    let size = NSSize(width: CGFloat(img.width) / backing, height: CGFloat(img.height) / backing)
+    let f = screen.frame
+    let rect = NSRect(x: f.maxX - e.right - size.width, y: f.maxY - e.top - size.height,
+                      width: size.width, height: size.height)
+    // the shadow margin may reach past the screen's edge, onto a neighbor display
+    let frame = rect.intersection(f)
+    guard !frame.isEmpty else { hide(); return }
+    let p = panel ?? makePanel()
+    p.setFrame(frame, display: false)
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    image.frame = CGRect(x: rect.minX - frame.minX, y: rect.minY - frame.minY, width: size.width, height: size.height)
+    image.contents = img
+    image.contentsScale = backing
+    CATransaction.commit()
+    highlight.cornerRadius = e.hoverR
+    highlight.backgroundColor = e.hover
+    p.orderFrontRegardless()
+    panel = p
+    shown = display
+    hovered = ""
+    hover(p.mouseLocationOutsideOfEventStream)
+    watch()
+  }
+
+  func hide() {
+    panel?.orderOut(nil)
+    shown = ""
+    hover(nil)
+  }
+
+  /// A point in the view (origin bottom-left) in the image's coordinates (origin top-left).
+  func imagePoint(_ point: NSPoint) -> CGPoint {
+    CGPoint(x: point.x - image.frame.minX, y: image.frame.maxY - point.y)
+  }
+
+  /// Highlights the entry under `point` (view coordinates; nil = none).
+  func hover(_ point: NSPoint?) {
+    var hit: (id: String, rect: CGRect)?
+    if let point, let v = panel?.contentView, v.bounds.contains(point) {
+      let p = imagePoint(point)
+      hit = hits[shown]?.first { $0.rect.contains(p) }
+    }
+    guard (hit?.id ?? "") != hovered else { return }
+    hovered = hit?.id ?? ""
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    if let hit {
+      highlight.frame = CGRect(x: hit.rect.minX, y: image.bounds.height - hit.rect.maxY,
+                               width: hit.rect.width, height: hit.rect.height)
+      highlight.isHidden = false
+    } else {
+      highlight.isHidden = true
+    }
+    CATransaction.commit()
+  }
+
+  /// A click inside the menu, in the view's coordinates.
+  func click(_ point: NSPoint) {
+    let p = imagePoint(point)
+    guard let hit = hits[shown]?.first(where: { $0.rect.contains(p) }) else {
+      // the image's margin holds the shadow: a click there is a click outside
+      let body = (hits[shown] ?? []).reduce(CGRect.null) { $0.union($1.rect) }.insetBy(dx: -6, dy: -6)
+      if !body.contains(p) { hide() }
+      return
+    }
+    clicked = Date()
+    if hit.id == "custom" { hide() } // the color panel takes over
+    triggerAsync("menu_select", ["ID": hit.id])
+  }
+
+  /// Picks up a new image (a selection re-renders the menu) while it is open.
+  func watch() {
+    guard watcher == nil else { return }
+    let fd = open((path as NSString).deletingLastPathComponent, O_EVTONLY)
+    guard fd >= 0 else { return }
+    let src = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write], queue: .main)
+    src.setEventHandler {
+      if self.isOpen, self.load() { self.show(self.shown) }
+    }
+    src.setCancelHandler { close(fd) }
+    src.resume()
+    watcher = src
+  }
+
+  func makePanel() -> NSPanel {
+    let p = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+    p.isOpaque = false
+    p.backgroundColor = .clear
+    p.hasShadow = false // drawn into the image (see layoutMenu)
+    p.hidesOnDeactivate = false
+    p.acceptsMouseMovedEvents = true // else only entering the window updates the hover
+    p.becomesKeyOnlyIfNeeded = true
+    p.level = .popUpMenu
+    p.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+    let view = MenuView()
+    view.onClick = { [weak self] in self?.click($0) }
+    view.onHover = { [weak self] in self?.hover($0) }
+    view.wantsLayer = true
+    view.layerContentsRedrawPolicy = .never
+    p.contentView = view
+    highlight.cornerCurve = .continuous
+    highlight.isHidden = true
+    image.addSublayer(highlight)
+    view.layer?.addSublayer(image)
+    return p
+  }
+}
+
+final class MenuView: NSView {
+  var onClick: ((NSPoint) -> Void)?
+  var onHover: ((NSPoint?) -> Void)?
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+  override func updateTrackingAreas() {
+    super.updateTrackingAreas()
+    trackingAreas.forEach(removeTrackingArea)
+    // activeAlways: the daemon's app is never active
+    addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                   owner: self))
+  }
+  override func mouseMoved(with event: NSEvent) { onHover?(convert(event.locationInWindow, from: nil)) }
+  override func mouseEntered(with event: NSEvent) { onHover?(convert(event.locationInWindow, from: nil)) }
+  override func mouseExited(with event: NSEvent) { onHover?(nil) }
+  override func mouseDown(with event: NSEvent) {}
+  override func mouseUp(with event: NSEvent) {
+    let p = convert(event.locationInWindow, from: nil)
+    if bounds.contains(p) { onClick?(p) }
+  }
+}
+
+/// CGDirectDisplayID of the display whose bar is under the click, or nil: the
+/// window the click went to must be sketchybar's (not a window, not the
+/// auto-hidden menu bar sliding in over the bar).
+func barDisplay(_ e: NSEvent) -> String? {
+  let p = NSEvent.mouseLocation
+  guard let screen = NSScreen.screens.first(where: { NSMouseInRect(p, $0.frame, false) }),
+        let wid = e.cgEvent?.getIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent),
+        wid > 0,
+        let info = CGWindowListCopyWindowInfo(.optionIncludingWindow, CGWindowID(wid)) as? [[String: Any]],
+        info.first?[kCGWindowOwnerName as String] as? String == "sketchybar" else { return nil }
+  return String(displayID(screen))
+}
+
 // MARK: - Daemon
 
 final class Daemon {
@@ -854,6 +1106,7 @@ final class Daemon {
   let work = DispatchQueue(label: "accent")
   let corners: Corners
   let tooltips = Tooltips()
+  let menu = Menu()
 
   /// cornerRadius: bottom corners of the built-in display (0 = off), see Corners
   init(cornerRadius: CGFloat) { corners = Corners(radius: cornerRadius) }
@@ -972,11 +1225,21 @@ final class Daemon {
                                            object: nil, queue: .main) { _ in
       self.scheduleAccent()
       self.corners.update()
+      self.menu.hide()
     }
     corners.update()
     watchWallpaperStore()
     watchIconTheme()
     NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { _ in self.checkHover() }
+    // clicks in the menu go to its own window; a global one is always elsewhere
+    NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { e in
+      if e.type == .rightMouseDown, let d = barDisplay(e) { self.menu.toggle(on: d) } else { self.menu.hide() }
+    }
+    // another app coming forward (cmd-N) closes the menu — except right after a
+    // click in it: on another display aerospace focuses that display on click
+    ws.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in
+      if Date().timeIntervalSince(self.menu.clicked) > 1 { self.menu.hide() }
+    }
     // aerials drift slowly; re-sample now and then, only large changes are emitted
     Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in self.scheduleAccent() }
     emitLayout()

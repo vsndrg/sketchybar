@@ -20,13 +20,6 @@ local palette = theme.palette()
 
 sbar.add("event", "layout_change")
 
--- Zero-width anchor at the right edge; the theme menu hangs off it.
-local anchor = sbar.add("item", "menu.anchor", {
-  position = "right",
-  width = 0,
-  popup = { align = "right", horizontal = true, height = config.popup.height, y_offset = config.popup.offset },
-})
-
 -- global events: an invisible item that never goes away. The clock follows
 -- `minute_change` from the helper daemon (fired right on the minute); the
 -- routine polls the battery and is the clock's fallback.
@@ -285,10 +278,7 @@ events:subscribe("layout_change", function(env)
 end)
 
 clicked = function(env)
-  if env.BUTTON == "right" then
-    sbar.exec("sketchybar --trigger theme_menu")
-    return
-  end
+  if env.BUTTON ~= "left" then return end -- a right click opens the menu (helper daemon)
   -- "<x on the screen under the cursor> <that screen's width> <its display id>"
   sbar.exec("'" .. config.helper .. "' cursor", function(out)
     local x, w, did = tostring(out):match("^%s*(%-?%d+)%s+(%d+)%s*(%d*)")
@@ -323,5 +313,3 @@ theme.on(function(p)
 end)
 
 update_battery()
-
-return { anchor = anchor }

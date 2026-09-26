@@ -20,13 +20,19 @@ local M = {
   -- daemon masks the bottom ones to match with Apple's continuous corner of
   -- this radius (the curve reaches ~1.53 r along each edge). 0 = off.
   screen_corner = 21,
-  -- popups (battery tooltip, theme menu) float this far below the islands
+  -- popups (battery tooltip, theme menu) float this far below the islands;
+  -- height: a one-row popup (a theme menu row with its padding)
   popup  = { height = 34, radius = 11, offset = 7 },
 
   font = {
     text   = "SF Pro Text",
-    medium = "Medium",
-    bold   = "Semibold",
+    -- Text weight, picked in the right-click menu (lib/theme.lua keeps the
+    -- choice): primary text (workspace digits, clock, layout) in `bold`,
+    -- secondary (date, tooltip, menu) one step lighter in `medium`.
+    weights = { "Regular", "Medium", "Semibold" },
+    lighter = { Regular = "Light", Medium = "Regular", Semibold = "Medium" },
+    bold   = "Medium",
+    medium = "Regular",
     size   = 12.5,
     -- sketchybar centers the line box; caps sit ~0.75pt low without this
     y_offset = 1,

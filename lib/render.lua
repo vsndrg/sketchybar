@@ -52,6 +52,7 @@ end
 
 local meta = {} -- out path -> { width, ranges, out }
 local used = {} -- out path -> os.time() of last use
+local pinned = {} -- owner -> { out path, ... }: shown by the daemon, never collected
 
 local function exists(path)
   local f = io.open(path, "r")
@@ -103,8 +104,12 @@ end
 -- and a later cache miss simply re-renders it.
 function M.gc(max_age)
   local cutoff = os.time() - max_age
+  local keep = {}
+  for _, list in pairs(pinned) do
+    for _, path in ipairs(list) do keep[path] = true end
+  end
   for path, t in pairs(used) do
-    if t < cutoff then
+    if t < cutoff and not keep[path] then
       os.remove(path)
       used[path] = nil
       meta[path] = nil
@@ -119,6 +124,22 @@ function M.row(opts, geo)
   opts.h = config.island.height
   if geo and geo.scale ~= 1 then opts.scale = geo.scale end
   return M.job(opts)
+end
+
+-- Images the daemon shows on demand (the menu) may sit unused for hours:
+-- keep an owner's current ones out of M.gc.
+function M.pin(owner, paths)
+  pinned[owner] = paths
+end
+
+-- A menu (helper layoutMenu: opts.w x opts.h, entries laid out by the caller,
+-- its shadow in a margin opts.m around it) as a canvas of its own.
+function M.menu(opts, geo)
+  opts.kind = "menu"
+  local m = opts.m or 0
+  local row = { kind = "row", h = opts.h + 2 * m, canvas_w = opts.w + 2 * m, islands = { opts } }
+  if geo and geo.scale ~= 1 then row.scale = geo.scale end
+  return M.job(row)
 end
 
 -- Shared island style for jobs.

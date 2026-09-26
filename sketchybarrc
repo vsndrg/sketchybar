@@ -11,10 +11,8 @@ os.execute("make -s -C '" .. dir .. "/helper' >/dev/null 2>&1")
 sbar = require("sketchybar")
 local config = require("config")
 local theme = require("lib.theme")
-local frame = require("lib.frame")
 local sh = require("lib.sh")
 
-frame.hold()
 sbar.begin_config()
 
 sbar.bar({
@@ -55,8 +53,9 @@ sbar.default({
 require("items.spaces")
 
 -- right: layout │ battery │ clock (one fixed-width item, notch → edge)
-local status = require("items.status")
-require("items.theme_menu")(status.anchor)
+require("items.status")
+-- right click anywhere on the bar: accent and text weight (a helper daemon window)
+require("items.theme_menu")
 
 -- Main screen geometry (notch) is read at startup; other displays coming and
 -- going are handled live by items.spaces. display_change also fires without
@@ -81,7 +80,6 @@ displays:subscribe("display_change", function()
 end)
 
 sbar.end_config()
-frame.release()
 
 theme.apply()
 

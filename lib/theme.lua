@@ -9,6 +9,7 @@ local M = {
   custom = 0xff0a84ff,
   wallpaper = 0xffc9ced6,
   preview = nil,
+  weight = config.font.bold,
   listeners = {},
 }
 
@@ -36,6 +37,7 @@ local function load()
     if k == "mode" and (v == "auto" or v == "custom") then M.mode = v end
     if k == "custom" then M.custom = color.parse(v) or M.custom end
     if k == "wallpaper" then M.wallpaper = color.parse(v) or M.wallpaper end
+    if k == "weight" and config.font.lighter[v] then M.weight = v end
   end
   f:close()
 end
@@ -43,7 +45,8 @@ end
 local function save()
   local f = io.open(state_file, "w")
   if not f then return end
-  f:write("mode=", M.mode, "\n", "custom=", color.hex(M.custom), "\n", "wallpaper=", color.hex(M.wallpaper), "\n")
+  f:write("mode=", M.mode, "\n", "custom=", color.hex(M.custom), "\n", "wallpaper=", color.hex(M.wallpaper), "\n",
+    "weight=", M.weight, "\n")
   f:close()
 end
 
@@ -65,6 +68,7 @@ function M.palette()
     pill_idle = color.tone(a, 0.44, 0.08),     -- shown workspace on a display without focus
     hover  = color.alpha(white, 0.10),         -- hovered workspace: a quiet hint it's clickable
     popup  = color.tone(a, 0.25, 0.015, 0.96),
+    menu   = color.tone(a, 0.34, 0.02),        -- lighter than dark app backgrounds (L≈0.2), like system menus
     glow   = color.tone(a, 0.80, 0.14),        -- window borders: bright against any wallpaper
     text   = white,
     muted  = color.alpha(white, 0.72),
@@ -121,10 +125,25 @@ function M.set_custom(c)
   M.apply()
 end
 
+-- Text weight: everything reads config.font at render time.
+local function apply_weight()
+  config.font.bold = M.weight
+  config.font.medium = config.font.lighter[M.weight]
+end
+
+function M.set_weight(w)
+  if not config.font.lighter[w] or w == M.weight then return end
+  M.weight = w
+  apply_weight()
+  save()
+  M.apply()
+end
+
 function M.set_preview(c)
   M.preview = c
   M.apply()
 end
 
 load()
+apply_weight()
 return M
