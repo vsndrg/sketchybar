@@ -6,7 +6,7 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
 ## Repos (each its own git repo)
 - `~/.config/sketchybar` — bar (Lua via SbarLua) + native helper `helper/main.swift` (`make -C helper`)
 - `~/.config/borders` — `bordersrc`, `patches/focus-latency.patch`, `build.sh` → `~/.local/bin/borders`
-- `~/.config/aerospace` — `aerospace.toml`, `patches/{switch-flicker,monitors}.patch`,
+- `~/.config/aerospace` — `aerospace.toml`, `patches/{switch-flicker,monitors,queries}.patch`,
   `patches/build.sh [--install|--restore]` (source in `~/.cache/aerospace-src`, builds offline)
 - `~/.config` is also a repo with NO commits and secrets staged (`github-copilot/auth.db`) — don't commit it.
 
@@ -170,5 +170,5 @@ each live on some monitor), plus:
    out of the fill and solid over the empty part — see `drawBattery` in `helper/main.swift`).
 3. (done 2026-09-26) Performance review + 4. bug test (multi-monitor spec, sleep/Sidecar) — both
    report-only. Findings + agreed fix order with checkboxes: `docs/review-2026-09-26.md` (evidence
-   and probe tools in `~/.local/state/sketchybar/review-2026-09-26/`). NEXT: fix plan step 1
-   (F6 30 s stall = exit(0) in willSleep, etc.), tick checkboxes there as items land.
+   and probe tools in `~/.local/state/sketchybar/review-2026-09-26/`). Step 1 (sleep/iPad: B1–B4) done,
+   awaiting the user's F6 / lid test. NEXT: step 2; tick checkboxes there as items land.
