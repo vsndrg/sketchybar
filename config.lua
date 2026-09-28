@@ -19,7 +19,7 @@ local M = {
   screen_corner = 21,
   -- popups (battery tooltip, theme menu) float this far below the islands;
   -- height: a one-row popup (a theme menu row with its padding)
-  popup  = { height = 34, radius = 11, offset = 7 },
+  popup  = { height = 34, offset = 7 },
 
   font = {
     text   = "SF Pro Text",
@@ -37,16 +37,20 @@ local M = {
 }
 
 -- Islands hang `gap` from the top and end flush with the bar (the notch
--- strip): 32 - gap tall. Island radius = h / (2 * 1.528): the largest radius
--- at which Apple's continuous corner still fits without being clamped. Inner
--- pills are concentric (inset 3).
+-- strip): 32 - gap tall. Inner pills are concentric (inset 3).
+-- Corner radius: one number for islands, menu and tooltip, set with the slider
+-- in the right-click menu (lib/theme.lua keeps it), from 0 to the built-in
+-- panel's own radius (`screen_corner`). Each shape takes min(radius, its
+-- height / 2) (the helper daemon derives them): the island caps at a capsule
+-- (13), the menu (64pt) at ~21. Default h / (2 * 1.528): the largest radius
+-- at which Apple's continuous corner still fits the island unclamped.
 do
   local g = M.bar.gap
   local h = M.bar.height - g
-  local r = math.floor(h / (2 * 1.528) * 4 + 0.5) / 4
   M.bar.margin = g
-  M.island = { height = h, radius = r, gap = g, stroke = 1 }
-  M.pill = { height = h - 6, radius = r - 3, inset = 3 }
+  M.corner = { default = math.floor(h / (2 * 1.528) * 4 + 0.5) / 4, max = M.screen_corner }
+  M.island = { height = h, gap = g, stroke = 1 }
+  M.pill = { height = h - 6, inset = 3 }
 end
 
 -- A display whose menu bar is lower than the bar gets a shorter strip (the

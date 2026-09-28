@@ -68,10 +68,15 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
 - AeroSpace build is signed with local cert `aerospace-local-codesign` (login keychain) so the Accessibility
   grant survives rebuilds. Build uses Command Line Tools (Xcode license not accepted).
 - Popups (theme menu, battery tooltip) are daemon glass panels at popUpMenu level on the display
-  under the mouse (a sketchybar popup only showed on the focused display). Menu: text weight only
-  (no accent), `menu_select ID=weight.X` → Lua → style republished → menu updates in place, stays
-  open; closes on a click elsewhere / app activation (ignored right after a menu click: AeroSpace
-  focuses the clicked display).
+  under the mouse (a sketchybar popup only showed on the focused display). Menu: text weight + corner
+  radius slider (no accent), `menu_select ID=weight.X` → Lua → style republished → menu updates in
+  place, stays open; closes on a click elsewhere / app activation (ignored right after a menu click:
+  AeroSpace focuses the clicked display). Weight lens slides on `.bouncy` (the bar's LensFrame), hover
+  slides (matchedGeometryEffect). Slider = system Slider drawn only (hit testing off); the daemon drags
+  it itself (mouseDown/Dragged, knob 22pt measured), previews on every bar live, sends
+  `ID=corner.<r>` to Lua only on release. Popups appear like the prototype (user wanted that, not a
+  window fade): glass inserted into a GlassEffectContainer on `.bouncy`, `.materialize` transition,
+  panel ordered out once removed. First render of a new panel is slow → both warmed at daemon start.
 - SbarLua ignores SIGCHLD except around its `os.execute` (default for system()): a `sbar.exec` child
   exiting then stays a zombie, and with a zombie `io.popen`'s pclose can hang forever (XNU wait4) →
   the whole bar froze. → No `os.execute` after `require("sketchybar")` (use `lib/sh.lua` at startup),
@@ -90,7 +95,11 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   36), outer.bottom 5 (AeroSpace lays out 1pt short). aerospace.toml gaps must be changed by hand.
   The user tried: G=10 (islands too thin, gap under bar too big), counting the border into the gap
   (rejected) — keep gaps measured from the window.
-- Islands: regular Liquid Glass, no tint, continuous corners r = h/3.056; lens h−6, concentric (inset 3).
+- Islands: regular Liquid Glass, no tint, continuous corners; lens h−6, concentric (inset 3).
+  Corner radius = ONE number (menu slider 0…screen_corner 21, saved in the theme state, default
+  h/3.056 = 8.5); every shape takes min(r, its height/2) in the daemon (island caps at a capsule 13 —
+  SwiftUI renders any r ≥ h/2 identically, verified; menu 64pt tall caps ~21). User asked for "the
+  display's rounding" (2026-09-28); no public API / published value → screen_corner (user-tuned).
   Picked in prototypes side by side (2026-09-28): user wants "the cleanest, default Apple look".
   Lens = light glass (regular, 30% white tint; the clear one got lost on dark wallpapers) on the
   focused display, regular glass on the others. Moves on the default `.bouncy` (user picked it; slower custom
