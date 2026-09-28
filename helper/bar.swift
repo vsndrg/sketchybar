@@ -243,7 +243,7 @@ struct SpacesIsland: View {
         SpaceCell(w: w, m: m)
           .background {
             if w.n == m.hover && !w.shown {
-              pill.fill(.primary.opacity(0.18)).matchedGeometryEffect(id: "hover", in: ns)
+              pill.fill(.primary.opacity(0.5)).matchedGeometryEffect(id: "hover", in: ns)
             }
           }
           .background(GeometryReader { g in

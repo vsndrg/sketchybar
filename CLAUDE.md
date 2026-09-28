@@ -106,7 +106,7 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   Picked in prototypes side by side (2026-09-28): user wants "the cleanest, default Apple look".
   Lens = light glass (regular, 30% white tint; the clear one got lost on dark wallpapers) on the
   focused display, regular glass on the others. Moves on the default `.bouncy` (user picked it; slower custom
-  springs rejected), clamped to the island. Hover: `.primary` fill 18% (10% was barely visible).
+  springs rejected), clamped to the island. Hover: `.primary` fill 50% (10%, 18% too faint; ≈ half the lens brightening).
   No accent anywhere; no active-window border. Text/icons: system label colors (glass adapts).
 - Built-in display bottom corners are masked to match the physical top ones: helper daemon `Corners`
   (`barhelper daemon <radius>`, `config.lua` `screen_corner`, user-tuned 21): Apple continuous corner,
