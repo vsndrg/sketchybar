@@ -132,12 +132,12 @@ local function rows_at(t, strips, geos)
     local battery = render.base("island", palette)
     battery.pad_l, battery.pad_r = 10, 10
     battery.parts = { { type = "battery", level = state.level, state = state.charge,
-      color = color.hex(state.low and palette.red or palette.text) } }
+      style = font.bold, size = font.battery, color = color.hex(state.low and palette.red or palette.text) } }
 
     local clock = render.base("island", palette)
     clock.pad_l, clock.pad_r = 10, 10
     clock.parts = {
-      text(d, font.medium, palette.muted),
+      text(d, font.bold, palette.muted),
       { type = "gap", w = 6 },
       -- widest digits reserve the width, so the island never changes minute to minute
       text(os.date("%H:%M", t), font.bold, palette.text, { min_text = "00:00", align = "right" }),

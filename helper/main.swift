@@ -132,13 +132,16 @@ func textWidth(_ s: String, _ f: NSFont) -> CGFloat {
   return CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
 }
 
-/// Battery: squircle body with the level printed inside (knocked out of the
-/// fill, solid over the empty part), optional bolt to the left.
+/// Battery, drawn like macOS: a solid squircle body, the charged part opaque,
+/// the rest translucent, the level knocked out of the whole body (readable
+/// wherever the fill edge falls); optional bolt to the left.
 let batteryHeight: CGFloat = 13
 func batteryWidth(_ state: Int) -> CGFloat { (state > 0 ? 9 : 0) + 28 + 1 + 2 }
 
-func drawBattery(_ ctx: CGContext, at origin: CGPoint, level: Int, state: Int, color: CGColor) {
+func drawBattery(_ ctx: CGContext, at origin: CGPoint, level: Int, state: Int, color: CGColor,
+                 style: String = "Bold", size: CGFloat = 10) {
   let bw: CGFloat = 28, bh = batteryHeight, nub: CGFloat = 2, gap: CGFloat = 1
+  let empty: CGFloat = 0.4 // alpha of the uncharged part and the nub
   ctx.saveGState()
   ctx.translateBy(x: origin.x, y: origin.y)
   ctx.beginTransparencyLayer(auxiliaryInfo: nil) // keeps the digit knock-out local
@@ -156,35 +159,25 @@ func drawBattery(_ ctx: CGContext, at origin: CGPoint, level: Int, state: Int, c
     ctx.setAlpha(1)
     ctx.translateBy(x: 9, y: 0)
   }
-  let body = CGRect(x: 0.5, y: 0.5, width: bw - 1, height: bh - 1)
-  ctx.setAlpha(0.4)
-  ctx.addPath(squircle(body, 4)); ctx.setStrokeColor(color); ctx.setLineWidth(1); ctx.strokePath()
-  ctx.addPath(squircle(CGRect(x: bw + gap, y: bh / 2 - 2.25, width: nub, height: 4.5), 1))
-  ctx.setFillColor(color); ctx.fillPath()
+  let body = CGRect(x: 0, y: 0, width: bw, height: bh)
+  ctx.setFillColor(color)
+  ctx.setAlpha(empty)
+  ctx.addPath(squircle(body, 4)); ctx.fillPath()
+  ctx.addPath(squircle(CGRect(x: bw + gap, y: bh / 2 - 2.25, width: nub, height: 4.5), 1)); ctx.fillPath()
   ctx.setAlpha(1)
-
-  let inner = body.insetBy(dx: 1.5, dy: 1.5)
-  let fillRect = CGRect(x: inner.minX, y: inner.minY, width: inner.width * CGFloat(max(0, min(100, level))) / 100, height: inner.height)
   ctx.saveGState()
-  ctx.clip(to: fillRect)
-  ctx.addPath(squircle(inner, 2.5)); ctx.setFillColor(color); ctx.fillPath()
+  ctx.clip(to: CGRect(x: 0, y: 0, width: bw * CGFloat(max(0, min(100, level))) / 100, height: bh))
+  ctx.addPath(squircle(body, 4)); ctx.fillPath() // over the translucent body: no seam at the edge
   ctx.restoreGState()
 
-  let f = font("SF Pro Text", "Bold", 9)
+  let f = font("SF Pro Text", style, size)
   let line = CTLineCreateWithAttributedString(NSAttributedString(string: "\(level)", attributes: [
     .font: f, .foregroundColor: NSColor(cgColor: color)!, .kern: -0.2,
   ]))
   let tw = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
   let pos = CGPoint(x: (bw - tw) / 2, y: (bh - f.capHeight) / 2)
-  ctx.saveGState()
-  ctx.clip(to: CGRect(x: fillRect.maxX, y: 0, width: bw, height: bh))
-  ctx.textPosition = pos; CTLineDraw(line, ctx)
-  ctx.restoreGState()
-  ctx.saveGState()
-  ctx.clip(to: CGRect(x: 0, y: 0, width: fillRect.maxX, height: bh))
   ctx.setBlendMode(.destinationOut)
   ctx.textPosition = pos; CTLineDraw(line, ctx)
-  ctx.restoreGState()
   ctx.endTransparencyLayer()
   ctx.restoreGState()
 }
@@ -497,9 +490,10 @@ func layoutIsland(_ j: [String: Any]) -> Laid {
       })
     case "battery":
       let state = Int(num(p, "state")), level = Int(num(p, "level"))
-      let c = col(p, "color")
+      let c = col(p, "color"), style = str(p, "style", "Bold"), size = num(p, "size", 10)
       laid.append(Part(w: batteryWidth(state)) { ctx, x in
-        drawBattery(ctx, at: CGPoint(x: x, y: (h - batteryHeight) / 2), level: level, state: state, color: c)
+        drawBattery(ctx, at: CGPoint(x: x, y: (h - batteryHeight) / 2), level: level, state: state, color: c,
+                    style: style, size: size)
       })
     default:
       laid.append(Part(w: num(p, "w")) { _, _ in })

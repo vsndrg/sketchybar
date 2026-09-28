@@ -107,7 +107,9 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   `NSWorkspaceIconAppearanceConfigurationDidChangeNotification` didn't reach a test process.
 - Text: SF Pro Text, optically centered on cap height by the helper. Weight picked in the menu
   (Regular/Medium/Semibold = primary text, secondary one step lighter; `config.font.weights`),
-  saved in the theme state. User found Semibold too heavy → Medium. Battery tooltip wording = macOS menu.
+  saved in the theme state. User found Semibold too heavy → Medium. Date = time weight (user). Battery
+  level: primary weight, `config.font.battery` 10pt, knocked out of a solid body (charged part opaque,
+  rest 0.4) like macOS — readable wherever the fill edge falls. Battery tooltip wording = macOS menu.
 - Clock: the daemon fires `minute_change` on every minute boundary (one timer, re-aligned on wake /
   clock change); the next minute's image is pre-rendered, so the swap is a cache hit. Measured on
   screen: +55ms after :00. The 60s routine (battery) is the clock's fallback.
@@ -166,8 +168,7 @@ each live on some monitor), plus:
 
 ## TODO (user, for 2026-09-26)
 1. (done 2026-09-26) F6 doesn't turn off the second monitor.
-2. Battery glyph: when the fill edge crosses the digits, they become unreadable (digits are knocked
-   out of the fill and solid over the empty part — see `drawBattery` in `helper/main.swift`).
+2. (done 2026-09-28) Battery glyph: digits unreadable where the fill edge crosses them → macOS style.
 3. (done 2026-09-26) Performance review + 4. bug test (multi-monitor spec, sleep/Sidecar) — both
    report-only. Findings + agreed fix order with checkboxes: `docs/review-2026-09-26.md` (evidence
    and probe tools in `~/.local/state/sketchybar/review-2026-09-26/`). Step 1 (sleep/iPad: B1–B4) done,

@@ -27,13 +27,14 @@ local M = {
   font = {
     text   = "SF Pro Text",
     -- Text weight, picked in the right-click menu (lib/theme.lua keeps the
-    -- choice): primary text (workspace digits, clock, layout) in `bold`,
-    -- secondary (date, tooltip, menu) one step lighter in `medium`.
+    -- choice): primary text (workspace digits, date and time, layout, battery
+    -- level) in `bold`, secondary (tooltip, menu) one step lighter in `medium`.
     weights = { "Regular", "Medium", "Semibold" },
     lighter = { Regular = "Light", Medium = "Regular", Semibold = "Medium" },
     bold   = "Medium",
     medium = "Regular",
     size   = 12.5,
+    battery = 10, -- the level inside the battery glyph
     -- sketchybar centers the line box; caps sit ~0.75pt low without this
     y_offset = 1,
   },
