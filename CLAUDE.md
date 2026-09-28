@@ -71,7 +71,7 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   under the mouse (a sketchybar popup only showed on the focused display). Menu: text weight + corner
   radius slider (no accent), `menu_select ID=weight.X` → Lua → style republished → menu updates in
   place, stays open; closes on a click elsewhere / app activation (ignored right after a menu click:
-  AeroSpace focuses the clicked display). Weight lens slides on `.bouncy` (the bar's LensFrame), hover
+  AeroSpace focuses the clicked display). Weight lens slides on `.bouncy` (the bar's LensFrame), hover (50% fill, as on the bar)
   slides (matchedGeometryEffect). Slider = system Slider drawn only (hit testing off); the daemon drags
   it itself (mouseDown/Dragged, knob 22pt measured), previews on every bar live, sends
   `ID=corner.<r>` to Lua only on release. Popups appear like the prototype (user wanted that, not a

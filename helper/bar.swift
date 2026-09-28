@@ -446,7 +446,7 @@ struct MenuView: View {
           .frame(width: w, height: 24 * s)
           .background {
             if live && id == m.hover && item != selected {
-              pill.fill(.primary.opacity(0.18)).matchedGeometryEffect(id: "hover", in: ns)
+              pill.fill(.primary.opacity(0.5)).matchedGeometryEffect(id: "hover", in: ns)
             }
           }
           .hit(live ? id : "")
