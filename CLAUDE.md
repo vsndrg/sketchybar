@@ -1,34 +1,40 @@
-# Desktop setup: sketchybar + AeroSpace + JankyBorders
+# Desktop setup: glass bar (sketchybar logic) + AeroSpace
 
 Context file for new sessions. Keep it short; update "Status" and "TODO" as work progresses.
 The user speaks Russian; answer in Russian. Details of every change are in `git log` of the three repos.
 
 ## Repos (each its own git repo)
-- `~/.config/sketchybar` — bar (Lua via SbarLua) + native helper `helper/main.swift` (`make -C helper`)
-- `~/.config/borders` — `bordersrc`, `patches/focus-latency.patch`, `build.sh` → `~/.local/bin/borders`
+- `~/.config/sketchybar` — bar logic (Lua via SbarLua) + native helper `helper/{main,bar}.swift` (`make -C helper`);
+  the helper daemon DRAWS the bar (`bar.swift`, SwiftUI Liquid Glass)
+- `~/.config/borders` — JankyBorders patches; NOT started any more (removed 2026-09-28 with the accent)
 - `~/.config/aerospace` — `aerospace.toml`, `patches/{switch-flicker,monitors,queries}.patch`,
   `patches/build.sh [--install|--restore]` (source in `~/.cache/aerospace-src`, builds offline)
 - `~/.config` is also a repo with NO commits and secrets staged (`github-copilot/auth.db`) — don't commit it.
 
 ## Hard constraints (found the hard way, don't re-derive)
-- macOS 26+: sketchybar can't batch window updates (moves/resizes and content land in different frames).
-  → Each bar side is ONE fixed-width item showing ONE image rendered by the helper (`render` subcommand).
-  Never change item width/position on state changes; only swap the image.
-- sketchybar → Lua events go over a tiny mach queue; per-item mouse.entered/exited on many items deadlocked
-  the bar. → No per-item hover; the helper daemon tracks the cursor (global mouse monitor) against
-  `~/.local/state/sketchybar/regions` (written via `lib/regions.lua`) and fires
-  `bar_hover REGION=… DISPLAY=<CGDirectDisplayID>` on change.
-- Clicks: `barhelper cursor` → "x_on_screen screen_width"; mapped to hit ranges from the renderer.
-- Multi-display: one `spaces.<CGDirectDisplayID>` item per display (`display=` arrangement id), added/
-  removed LIVE on display_change (user dislikes the visible bar reload). AeroSpace monitor = NSScreen
-  index (`monitor-appkit-nsscreen-screens-id`) → `barhelper screens` → CGDirectDisplayID →
-  `sbar.query("displays")` → arrangement id (shared list: `lib/displays.lua`). Status (right) is also one
-  item per display (`status.<did>`, same content), width capped
-  (`config.status_max`); spaces width per display (`config.left_width`). sketchybarrc reloads only
-  when the MAIN screen geometry changes, never while asleep: with the lid closed macOS swaps in a
-  virtual 1920×960 @1x display (the reload it caused, plus the one back after wake, left the main
-  bar stale: sketchybar skips drawing a bar whose display has no space, sid 0, and a reload +
-  Sidecar reconnect hit that window). Re-checked on system_woke. Click/hover ranges per display (device glyphs differ).
+- The bar is the helper daemon's windows (`helper/bar.swift`), one NSPanel per display at the
+  backstopMenu level (-20, like sketchybar's; the auto-hidden menu bar covers it), no
+  fullScreenAuxiliary (not on fullscreen Spaces). Real Liquid Glass (SwiftUI `glassEffect`) refracts
+  what is behind the window → can't be baked into images; sketchybar's bar is `hidden=on`, it only
+  delivers events. Lua writes the whole state to `~/.local/state/sketchybar/bar.json` (`lib/bar.lua`,
+  atomic, only on change); the daemon watches the dir (kqueue) — no process per update. One state
+  change = one SwiftUI transaction per window (islands, lens, text together).
+- Old sketchybar limits that forced one-image items, the hover-regions file, `barhelper cursor`,
+  prerendering and the geometry reload are gone with it. The mach-queue deadlock still means: don't
+  add per-item mouse events to sketchybar items (the daemon handles mouse itself).
+- Mouse in daemon windows (app policy .prohibited, never key): tracking areas must be activeAlways,
+  acceptsFirstMouse; hit testing uses frames the SwiftUI layout reports (HitKey), not SwiftUI
+  gestures. Fully transparent pixels let clicks through to the desktop → the strip has a 0.002-alpha
+  background (right click anywhere on the strip opens the theme menu).
+- Lens (selected workspace): glass whose frame animates must be `.interactive()` — a plain glass
+  effect re-animates from its old place once the frame animation ends (lens snapped back, ran again).
+- Apple gives no public "selection lens" (the iOS Photos segmented lens): macOS segmented controls
+  just jump. `glassEffectID` morph between two positions = cross-fade. Glass drips (GlassEffectContainer
+  + glassEffectID) only for elements inserted next to each other; a menu under an island materializes.
+  User rejected hand-made morphs/drips ("as if you wrote it yourself") → system `.bouncy`, no custom.
+- Multi-display: Lua publishes one entry per display (`lib/displays.lua` from `barhelper screens`:
+  NSScreen index = AeroSpace monitor id, CGDirectDisplayID, menu bar height, kind); the daemon adds/
+  removes windows live and re-places them on didChangeScreenParameters. No reloads.
 - AeroSpace: a hidden workspace remembers its monitor by the monitor's top-left point
   (`assignedMonitorPoint`); a missing monitor maps to the nearest one → reconnect returns them natively.
   BUT Sidecar disconnect makes its windows "die" briefly → AeroSpace's closed-windows cache
@@ -46,30 +52,17 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   `SidecarDisplayManager`, else the iPad stays lit), sleeps (reconnects itself only if sleep fails).
   Reconnect after wake + unlock lives in the daemon (`SidecarReconnect`), so it also covers lid close /
   idle sleep: iPads connected at willSleep + ones lost in the 30s before it (the lid may drop the iPad
-  first). Opening the lid changes the main screen → sketchybarrc restarts the daemon right after wake
-  (before didWake reaches it), so the list lives in `~/.local/state/sketchybar/sidecar-reconnect` and a
-  fresh daemon picks it up. Log: `~/.local/state/sketchybar/sleep.log`.
+  first). The list lives in `~/.local/state/sketchybar/sidecar-reconnect`, so a restarted daemon
+  (sketchybar reload) picks it up. Log: `~/.local/state/sketchybar/sleep.log`.
 - AeroSpace moves windows via AX, per app, async; no atomic switch possible without SIP. Patches reorder/wait.
 - AeroSpace forgets window→workspace on restart; `build.sh --install` snapshots and restores it.
 - AeroSpace build is signed with local cert `aerospace-local-codesign` (login keychain) so the Accessibility
   grant survives rebuilds. Build uses Command Line Tools (Xcode license not accepted).
-- borders runs from `~/.local/bin/borders` (brew agent disabled via `launchctl disable`), patched:
-  focus latency, `glow_radius=` option, window-radius (windows reporting no corner radius, e.g. WezTerm
-  without a title bar, get the smallest radius other windows report instead of 9). `build.sh` builds
-  offline from `~/.cache/borders-src`.
-- sketchybar shows a popup on the display with the FOCUSED window, anchored at the item's rect there:
-  a popup of a single-display item lands at -9999 elsewhere. So the battery tooltip is the helper
-  daemon's own window (`Tooltips`): Lua renders it per display and lists it in
-  `~/.local/state/sketchybar/tooltips`, the daemon shows it on hover (no process spawn). The theme menu
-  likewise (`Menu`, `items/theme_menu.lua`, `~/.local/state/sketchybar/menu` with hit rects): the
-  daemon opens it on a right click ANYWHERE on the bar (global monitor; the click's target window
-  must be sketchybar's), fires `menu_select ID=…`, stays open (re-renders in place), closes on a
-  click elsewhere / app activation. A click on another display makes AeroSpace focus that display
-  (native leftMouseUp handler) → activation right after a menu click is ignored. Hover = a
-  highlight layer over the image (no re-render). Shadow drawn into the image (a non-key window's
-  system shadow is invisible); fill L 0.34 (`palette.menu`) — at the popup's L 0.25 it matched
-  WezTerm's background and blended in (user briefly found it too much, then kept it).
-  Pills / hover highlights never touch: 6pt apart (`widths.sep`), as in the first row.
+- Popups (theme menu, battery tooltip) are daemon glass panels at popUpMenu level on the display
+  under the mouse (a sketchybar popup only showed on the focused display). Menu: text weight only
+  (no accent), `menu_select ID=weight.X` → Lua → style republished → menu updates in place, stays
+  open; closes on a click elsewhere / app activation (ignored right after a menu click: AeroSpace
+  focuses the clicked display).
 - SbarLua ignores SIGCHLD except around its `os.execute` (default for system()): a `sbar.exec` child
   exiting then stays a zombie, and with a zombie `io.popen`'s pclose can hang forever (XNU wait4) →
   the whole bar froze. → No `os.execute` after `require("sketchybar")` (use `lib/sh.lua` at startup),
@@ -83,63 +76,55 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   col 5, from WindowServer's menu bar windows, listed even when auto-hidden: built-in 33, iPad 30), so
   the auto-hidden menu bar covers the islands. Islands hang G from the top, end flush with the strip.
   The Mac is the reference: on a shorter strip the islands are the SAME islands scaled as a whole
-  (`config.strip(strip).scale` = (strip−G)/(32−G); helper renders at higher pixel density, crisp),
-  gap between islands kept at G on screen; hover regions per display (5th field = display id), clicks
-  scaled via `barhelper cursor` (prints display id). Windows start at 38 built-in / 36 others (outer.top built-in 6 / others
+  (`config.strip(strip).scale` = (strip−G)/(32−G); the daemon multiplies every size by it),
+  gap between islands kept at G on screen. Windows start at 38 built-in / 36 others (outer.top built-in 6 / others
   36), outer.bottom 5 (AeroSpace lays out 1pt short). aerospace.toml gaps must be changed by hand.
   The user tried: G=10 (islands too thin, gap under bar too big), counting the border into the gap
   (rejected) — keep gaps measured from the window.
-- Islands: squircle (SwiftUI continuous corners), r = h/3.056; inner pill h−6, concentric (inset 3).
-- Active border: `config.lua` `border = { width = 4, glow = 10 }` → `lib/theme.lua` → borders args.
+- Islands: regular Liquid Glass, no tint, continuous corners r = h/3.056; lens h−6, concentric (inset 3).
+  Picked in prototypes side by side (2026-09-28): user wants "the cleanest, default Apple look".
+  Lens = clear glass (bright rim, refracts the icons under it) on the focused display, regular glass
+  on the others (Apple's non-key look). Moves on the default `.bouncy` (user picked it; slower custom
+  springs rejected), clamped to the island. Hover: `.primary` fill 18% (10% was barely visible).
+  No accent anywhere; no active-window border. Text/icons: system label colors (glass adapts).
 - Built-in display bottom corners are masked to match the physical top ones: helper daemon `Corners`
   (`barhelper daemon <radius>`, `config.lua` `screen_corner`, user-tuned 21): Apple continuous corner,
   rendered once into static layer contents (no redraws), hidden on a native fullscreen Space
   (`CGSCopyManagedDisplaySpaces` type 4), `sharingType = .none` (not in screenshots — to check it
   visually, build a copy with `.readOnly`).
-- Accent: wallpaper hue via ScreenCaptureKit (aerial wallpapers have no file), tones in OKLCH
-  (`lib/color.lua` `tone`), or custom (macOS accents / NSColorPanel). Also drives borders glow.
-  Hue = the one covering most of the wallpaper's top eighth (area-weighted by OKLCH chroma; whole
-  wallpaper if that strip is gray) — the sky the bar hangs on. Was: most saturated hue anywhere →
-  sunset orange → brown islands. Rejected (2026-09-28, rendered side by side): vivid accent +
-  graphite island, warm hues shifted to rose. One hue for island/pill/glow (user).
-  No polling: re-sampled on wallpaper store / space / display / appearance change and wake; a
-  dynamic HEIC (`apple_desktop:solar`/`h24` XMP, frame per sun position) → daemon predicts the next
-  frame switch and re-samples at +1 min. Sun at `config.lua` `location` (SPb, passed as daemon args);
-  unset → the time zone's zone.tab city (no location access), plus a +45 min re-check.
-  `barhelper phase [lat lon]` prints frame + next switch. `barhelper accent` from a shell: the
-  capture hangs there (works in the daemon) → falls back to the HEIC frame after 3s.
-- Island fill: OKLCH L 0.30, C 0.07 (tinted by the accent) — lifts macOS 26 dark-theme app icons
-  (near-black plates, L≈0.18). Tried: L 0.22 neutral (icons vanish), L 0.40 gray (user: "muddy,
-  looks inactive"). User keeps the dark icon theme; don't force light icon variants.
 - App icons follow the system icon theme (`AppleIconAppearanceTheme`/`…TintColor`): the daemon
-  watches `~/Library/Preferences` → `icon_theme_change`, theme is part of the islands' cache key.
+  watches `~/Library/Preferences` and re-reads icons (clears its icon cache).
   Lag 5–10s = cfprefsd flushing .GlobalPreferences.plist; user accepted it (no polling). AppKit's
   `NSWorkspaceIconAppearanceConfigurationDidChangeNotification` didn't reach a test process.
-- Text: SF Pro Text, optically centered on cap height by the helper. Weight picked in the menu
+- Text: SF Pro Text. Weight picked in the menu
   (Regular/Medium/Semibold = primary text, secondary one step lighter; `config.font.weights`),
   saved in the theme state. User found Semibold too heavy → Medium. Date = time weight (user). Battery
   level: primary weight, `config.font.battery` 10pt, knocked out of a solid body (charged part opaque,
-  rest 0.4) like macOS — readable wherever the fill edge falls. Battery tooltip wording = macOS menu.
+  rest 0.4) like macOS — readable wherever the fill edge falls; drawn as a template image (tinted like
+  text), red when low. Battery tooltip wording = macOS menu.
 - Clock: the daemon fires `minute_change` on every minute boundary (one timer, re-aligned on wake /
-  clock change); the next minute's image is pre-rendered, so the swap is a cache hit. Measured on
-  screen: +55ms after :00. The 60s routine (battery) is the clock's fallback.
+  clock change) → Lua → bar.json. The 60s routine (battery) is the clock's fallback.
 
 ## How to verify visually (Screen Recording is granted to WezTerm)
 - `screencapture -x -R x,y,w,h out.png` / `-v -V secs out.mov`; ffmpeg `-fps_mode passthrough` → frames;
   diff frames with PIL/numpy (venv with pillow+numpy was in the session scratchpad; recreate if needed).
 - Window order/position probe: `CGWindowListCopyWindowInfo` polled every 2–5ms (small Swift script).
-- Real mouse moves for hover tests: post `CGEvent` mouseMoved (small Swift script).
+- Real mouse moves / clicks for hover and click tests: post `CGEvent`s (small Swift scripts).
+- The glass look depends on what is behind: judge it over the wallpaper (the real bar's backdrop),
+  not over windows (over a dark terminal it just looks transparent).
 
-## Status (2026-09-26)
-Done and committed: bar rewrite, whole-island rendering, hover (workspaces + battery tooltip), themes,
+## Status (2026-09-28)
+Glass bar (daemon-drawn) committed and running; borders removed. Next (user-agreed): once it has
+settled, consider moving the logic out of Lua/sketchybar into the daemon (AeroSpace server socket,
+IOKit battery) — fewer hops, no mach queue / SbarLua pitfalls. User chose the simple Lua path first.
+
+Earlier: Done and committed: bar rewrite, whole-island rendering, hover (workspaces + battery tooltip), themes,
 borders focus patch, AeroSpace flicker patch (+ race fix, bottom-up hide, layout restore, signing),
 bug-review fixes (15 items), multi-display basics (clicks/hover per screen, widths fit narrowest screen,
 reload only on real geometry change), multi-monitor spec below (2026-09-26, verified by the user:
 iPad disconnect/reconnect returns its workspaces, no bar reload, cross-monitor switches instant).
 
 Open issues:
-- Battery tooltip "blinks" on first hover (user report) — NOT reproduced (tried event, real mouse,
-  stale image). Ask the user for a screen recording and analyze frames.
 - Second display: lower accordion window flashes on switch again. Planned fix (not implemented):
   replace timeouts with confirmed ordering — per monitor only; place + confirm the top window before
   revealing lower accordion windows; hide old windows top-down only after the ones below are gone;
@@ -172,8 +157,8 @@ each live on some monitor), plus:
   same numeric order, no separate group, no pill even if visible there. Tried: dimming the whole
   workspace to 40% (user: looks bad, meaning unclear — dimming reads as "disabled"); a superscript
   badge (fine, user picked the slot). Right side (status) identical on every monitor.
-  Focused-monitor indicator: visible ws pill is bright on the focused monitor, dimmed on the others;
-  on the other monitors' bars the focused workspace (foreign there) gets a dashed accent outline.
+  Focused-monitor indicator: clear lens on the focused monitor, regular (subdued) on the others; the
+  dashed outline of the focused ws on other bars was dropped with the glass redesign (Apple has none).
   Bar clicks behave like cmd-N.
 
 ## TODO (user, for 2026-09-26)
