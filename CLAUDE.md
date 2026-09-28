@@ -98,6 +98,16 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   visually, build a copy with `.readOnly`).
 - Accent: wallpaper hue via ScreenCaptureKit (aerial wallpapers have no file), tones in OKLCH
   (`lib/color.lua` `tone`), or custom (macOS accents / NSColorPanel). Also drives borders glow.
+  Hue = the one covering most of the wallpaper's top eighth (area-weighted by OKLCH chroma; whole
+  wallpaper if that strip is gray) — the sky the bar hangs on. Was: most saturated hue anywhere →
+  sunset orange → brown islands. Rejected (2026-09-28, rendered side by side): vivid accent +
+  graphite island, warm hues shifted to rose. One hue for island/pill/glow (user).
+  No polling: re-sampled on wallpaper store / space / display / appearance change and wake; a
+  dynamic HEIC (`apple_desktop:solar`/`h24` XMP, frame per sun position) → daemon predicts the next
+  frame switch and re-samples at +1 min. Sun at `config.lua` `location` (SPb, passed as daemon args);
+  unset → the time zone's zone.tab city (no location access), plus a +45 min re-check.
+  `barhelper phase [lat lon]` prints frame + next switch. `barhelper accent` from a shell: the
+  capture hangs there (works in the daemon) → falls back to the HEIC frame after 3s.
 - Island fill: OKLCH L 0.30, C 0.07 (tinted by the accent) — lifts macOS 26 dark-theme app icons
   (near-black plates, L≈0.18). Tried: L 0.22 neutral (icons vanish), L 0.40 gray (user: "muddy,
   looks inactive"). User keeps the dark icon theme; don't force light icon variants.

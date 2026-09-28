@@ -106,6 +106,7 @@ sbar.end_config()
 theme.apply()
 
 -- The daemon fires layout_change / wallpaper_change / minute_change; start it once items exist.
-sh.run("pkill -f 'barhelper daemon' 2>/dev/null; (nohup '" .. config.helper .. "' daemon " .. config.screen_corner .. " >/dev/null 2>&1 &)")
+sh.run("pkill -f 'barhelper daemon' 2>/dev/null; (nohup '" .. config.helper .. "' daemon " .. config.screen_corner
+  .. (config.location and (" " .. config.location[1] .. " " .. config.location[2]) or "") .. " >/dev/null 2>&1 &)")
 
 sbar.event_loop()

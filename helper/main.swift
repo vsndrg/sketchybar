@@ -8,6 +8,7 @@
 //                                                 (STATE: 0 battery, 1 charging, 2 on AC)
 //   barhelper measure FAMILY STYLE SIZE TEXT...   text widths in points, one per line
 //   barhelper accent                              print wallpaper accent (0xAARRGGBB)
+//   barhelper phase [LAT LON]                     dynamic wallpaper: "<frame now> <next switch>" (nothing if static)
 //   barhelper layout [next]                       print / switch keyboard layout
 //   barhelper geometry                            main screen: "<screen_w> <left_of_notch_w> <right_of_notch_w> <scale>"
 //   barhelper screens                             per display: "<NSScreen index, 1-based> <CGDirectDisplayID> <w> <left_of_notch_w|0>"
@@ -220,10 +221,9 @@ func captureWallpaper() -> CGImage? {
 /// Aerials have no image file; fall back to the thumbnail of the chosen variant.
 func aerialThumbnail() -> CGImage? {
   let base = NSHomeDirectory() + "/Library/Application Support/com.apple.wallpaper"
-  guard let data = FileManager.default.contents(atPath: base + "/Store/Index.plist"),
-        let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-        let desk = (root["AllSpacesAndDisplays"] as? [String: Any])?["Desktop"] as? [String: Any],
-        let content = desk["Content"] as? [String: Any] else { return nil }
+  guard let content = desktopWallpaperContent(),
+        (content["Choices"] as? [[String: Any]])?.first?["Provider"] as? String == "com.apple.wallpaper.choice.aerials"
+  else { return nil }
   var ids: [String] = []
   if let opts = content["EncodedOptionValues"] as? Data,
      let o = try? PropertyListSerialization.propertyList(from: opts, format: nil) as? [String: Any],
@@ -249,14 +249,161 @@ func loadThumb(_ url: URL) -> CGImage? {
 
 func wallpaperImage() -> CGImage? {
   if let img = captureWallpaper() { return img }
+  if let dyn = dynamicWallpaper(), let src = CGImageSourceCreateWithURL(dyn.url as CFURL, nil),
+     let img = CGImageSourceCreateThumbnailAtIndex(src, dyn.frame(Date()), [
+       kCGImageSourceCreateThumbnailFromImageAlways: true,
+       kCGImageSourceThumbnailMaxPixelSize: 192,
+     ] as CFDictionary) { return img }
   if let img = aerialThumbnail() { return img }
   let screen = NSScreen.screens.first { $0.auxiliaryTopLeftArea != nil } ?? NSScreen.main
   if let url = screen.flatMap({ NSWorkspace.shared.desktopImageURL(for: $0) }) { return loadThumb(url) }
   return nil
 }
 
-/// Most prominent hue of the wallpaper, lifted to read well on a dark bar.
-/// Dark wallpapers count too: hue is weighted by saturation, brightness only gates noise.
+// MARK: - Dynamic wallpaper phases
+//
+// A dynamic wallpaper is a HEIC with several frames and a schedule in its XMP:
+// `apple_desktop:solar` (sun altitude/azimuth per frame) or `apple_desktop:h24`
+// (time of day per frame). WindowManager shows the frame closest to the sun's
+// (or clock's) position, so the next switch is known in advance: the daemon
+// re-samples the accent then instead of polling. The sun is placed at
+// `sunLocation` (config.lua `location`), else at the time zone's reference city
+// (zone.tab) — no location access — which can be off by half an hour; the
+// daemon then looks again later (see Daemon.schedulePhase).
+
+/// Latitude/longitude (radians) from the daemon's arguments, nil = unknown.
+var sunLocation: (Double, Double)?
+
+func parseLocation(_ a: ArraySlice<String>) -> (Double, Double)? {
+  guard a.count >= 2, let lat = Double(a[a.startIndex]), let lon = Double(a[a.startIndex + 1]) else { return nil }
+  return (lat * .pi / 180, lon * .pi / 180)
+}
+
+/// Desktop wallpaper settings (all spaces and displays) from the wallpaper store.
+func desktopWallpaperContent() -> [String: Any]? {
+  let path = NSHomeDirectory() + "/Library/Application Support/com.apple.wallpaper/Store/Index.plist"
+  guard let data = FileManager.default.contents(atPath: path),
+        let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+        let desk = (root["AllSpacesAndDisplays"] as? [String: Any])?["Desktop"] as? [String: Any]
+  else { return nil }
+  return desk["Content"] as? [String: Any]
+}
+
+func plist(_ data: Any?) -> [String: Any]? {
+  (data as? Data).flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] }
+}
+
+/// The desktop wallpaper's HEIC and the frame it shows at a given date, if it
+/// is dynamic (and set to follow the time of day, not light/dark/appearance).
+func dynamicWallpaper() -> (url: URL, frame: (Date) -> Int)? {
+  guard let content = desktopWallpaperContent(),
+        let choice = (content["Choices"] as? [[String: Any]])?.first else { return nil }
+  let style = (((plist(content["EncodedOptionValues"])?["values"] as? [String: Any])?["style"]
+    as? [String: Any])?["picker"] as? [String: Any]).flatMap { ($0["_0"] as? [String: Any])?["id"] as? String }
+  if let style, style != "dynamic" { return nil }
+  // system pictures: a .madesktop plist naming a downloaded asset; own files: the .heic itself
+  let urls = [((plist(choice["Configuration"])?["url"] as? [String: Any])?["relative"] as? String)]
+    + ((choice["Files"] as? [[String: Any]]) ?? []).map { ($0["relative"] as? String) }
+  guard var url = urls.compactMap({ $0.flatMap(URL.init(string:)) }).first else { return nil }
+  if url.pathExtension == "madesktop" {
+    guard let d = FileManager.default.contents(atPath: url.path),
+          let m = try? PropertyListSerialization.propertyList(from: d, format: nil) as? [String: Any],
+          m["isDynamic"] as? Bool == true, let id = m["mobileAssetID"] as? String else { return nil }
+    url = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Application Support/com.apple.mobileAssetDesktop/\(id).heic")
+  }
+  guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+        let meta = CGImageSourceCopyMetadataAtIndex(src, 0, nil) else { return nil }
+  func tag(_ name: String) -> [String: Any]? {
+    (CGImageMetadataCopyStringValueWithPath(meta, nil, name as CFString) as String?)
+      .flatMap { Data(base64Encoded: $0) }
+      .flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] }
+  }
+  if let solar = tag("apple_desktop:solar")?["si"] as? [[String: Any]] {
+    let frames = solar.compactMap { f -> (alt: Double, az: Double, i: Int)? in
+      guard let a = (f["a"] as? NSNumber)?.doubleValue, let z = (f["z"] as? NSNumber)?.doubleValue,
+            let i = (f["i"] as? NSNumber)?.intValue else { return nil }
+      return (a * .pi / 180, z * .pi / 180, i)
+    }
+    guard !frames.isEmpty else { return nil }
+    let (lat, lon) = sunLocation ?? timeZoneLocation()
+    return (url, { date in
+      let sun = sunPosition(date, lat: lat, lon: lon)
+      // nearest frame on the sky (great-circle distance)
+      return frames.max { f, g in
+        func closeness(_ f: (alt: Double, az: Double, i: Int)) -> Double {
+          sin(f.alt) * sin(sun.alt) + cos(f.alt) * cos(sun.alt) * cos(f.az - sun.az)
+        }
+        return closeness(f) < closeness(g)
+      }!.i
+    })
+  }
+  if let h24 = tag("apple_desktop:h24")?["ti"] as? [[String: Any]] {
+    let frames = h24.compactMap { f -> (t: Double, i: Int)? in
+      guard let t = (f["t"] as? NSNumber)?.doubleValue, let i = (f["i"] as? NSNumber)?.intValue else { return nil }
+      return (t, i)
+    }.sorted { $0.t < $1.t }
+    guard let last = frames.last else { return nil }
+    return (url, { date in
+      let c = Calendar.current.dateComponents([.hour, .minute], from: date)
+      let t = (Double(c.hour ?? 0) + Double(c.minute ?? 0) / 60) / 24
+      return (frames.last { $0.t <= t } ?? last).i
+    })
+  }
+  return nil
+}
+
+/// When the dynamic wallpaper switches to another frame next (minute precision).
+func nextWallpaperPhase(after start: Date = Date()) -> Date? {
+  guard let frame = dynamicWallpaper()?.frame else { return nil }
+  let now = frame(start)
+  for m in 1...(26 * 60) {
+    let t = start.addingTimeInterval(Double(m) * 60)
+    if frame(t) != now { return t }
+  }
+  return nil
+}
+
+/// Latitude/longitude (radians) of the current time zone's reference city.
+func timeZoneLocation() -> (Double, Double) {
+  let tz = TimeZone.current
+  let fallback = (45 * Double.pi / 180, Double(tz.secondsFromGMT()) / 240 * .pi / 180)
+  guard let tab = try? String(contentsOfFile: "/usr/share/zoneinfo/zone.tab", encoding: .utf8),
+        let line = tab.split(separator: "\n").first(where: { $0.split(separator: "\t").dropFirst(2).first == Substring(tz.identifier) })
+  else { return fallback }
+  // ±DDMM[SS]±DDDMM[SS]
+  let coord = String(line.split(separator: "\t")[1])
+  guard let split = coord.dropFirst().firstIndex(where: { $0 == "+" || $0 == "-" }) else { return fallback }
+  func angle(_ s: Substring, degDigits: Int) -> Double {
+    let sign: Double = s.first == "-" ? -1 : 1
+    let d = Array(s.dropFirst()).map { Double(String($0)) ?? 0 }
+    func num(_ r: Range<Int>) -> Double { r.upperBound <= d.count ? r.reduce(0) { $0 * 10 + d[$1] } : 0 }
+    let deg = num(0..<degDigits), min = num(degDigits..<degDigits + 2), sec = num(degDigits + 2..<degDigits + 4)
+    return sign * (deg + min / 60 + sec / 3600) * .pi / 180
+  }
+  return (angle(coord[..<split], degDigits: 2), angle(coord[split...], degDigits: 3))
+}
+
+/// Sun altitude and azimuth (radians, azimuth clockwise from north), low-precision
+/// ephemeris (≈0.01° — far below what matters for picking a frame).
+func sunPosition(_ date: Date, lat: Double, lon: Double) -> (alt: Double, az: Double) {
+  let rad = Double.pi / 180
+  let d = date.timeIntervalSince1970 / 86400 - 10957.5 // days since J2000.0
+  let g = (357.529 + 0.98560028 * d) * rad
+  let q = 280.459 + 0.98564736 * d
+  let l = (q + 1.915 * sin(g) + 0.020 * sin(2 * g)) * rad
+  let e = (23.439 - 0.00000036 * d) * rad
+  let ra = atan2(cos(e) * sin(l), cos(l)), dec = asin(sin(e) * sin(l))
+  let gmst = (280.46061837 + 360.98564736629 * d) * rad
+  let ha = gmst + lon - ra
+  let alt = asin(sin(lat) * sin(dec) + cos(lat) * cos(dec) * cos(ha))
+  let az = atan2(-sin(ha), tan(dec) * cos(lat) - sin(lat) * cos(ha))
+  return (alt, az < 0 ? az + 2 * .pi : az)
+}
+
+/// The hue that covers most of the wallpaper right under the bar (its top
+/// eighth; the whole wallpaper if that strip is gray). Area-weighted, not the
+/// most saturated one: a sunset glow at the horizon would win that, and a dark
+/// orange island is just brown — the sky it hangs on is what the bar goes with.
 func accent() -> String {
   let neutral = "0xffc9ced6"
   guard let img = wallpaperImage() else { return neutral }
@@ -268,34 +415,26 @@ func accent() -> String {
                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
   ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
 
-  let buckets = 36
-  var weight = [Double](repeating: 0, count: buckets)
-  var hx = weight, hy = weight, sat = weight
-  var total = 0.0
-  for i in stride(from: 0, to: px.count, by: 4) {
-    let c = NSColor(srgbRed: CGFloat(px[i]) / 255, green: CGFloat(px[i + 1]) / 255, blue: CGFloat(px[i + 2]) / 255, alpha: 1)
-    var H: CGFloat = 0, S: CGFloat = 0, B: CGFloat = 0
-    c.getHue(&H, saturation: &S, brightness: &B, alpha: nil)
-    total += 1
-    guard B > 0.08, S > 0.12 else { continue }
-    let k = min(buckets - 1, Int(H * CGFloat(buckets)))
-    // chroma-weighted: vivid pixels dominate, brightness matters only a little
-    let wgt = Double(S * S) * Double(0.35 + 0.65 * B)
-    weight[k] += wgt
-    hx[k] += cos(Double(H) * 2 * .pi) * wgt; hy[k] += sin(Double(H) * 2 * .pi) * wgt
-    sat[k] += Double(S) * wgt
+  /// Dominant hue of pixel rows 0..<rows (row 0 = top), nil if they're gray.
+  func dominantHue(rows: Int) -> Double? {
+    let buckets = 36
+    var weight = [Double](repeating: 0, count: buckets)
+    var hx = weight, hy = weight
+    for i in stride(from: 0, to: rows * w * 4, by: 4) {
+      let (L, C, hue) = toOklch(Double(px[i]) / 255, Double(px[i + 1]) / 255, Double(px[i + 2]) / 255)
+      guard L > 0.08, C > 0.02 else { continue }
+      let k = Int((hue < 0 ? hue + 2 * .pi : hue) / (2 * .pi) * Double(buckets)) % buckets
+      weight[k] += C; hx[k] += cos(hue) * C; hy[k] += sin(hue) * C
+    }
+    let score = (0..<buckets).map { weight[($0 + buckets - 1) % buckets] * 0.5 + weight[$0] + weight[($0 + 1) % buckets] * 0.5 }
+    // colored pixels must cover a meaningful part of the area (C ≈ 0.05 on 5% of it)
+    guard let best = score.indices.max(by: { score[$0] < score[$1] }),
+          score[best] > Double(rows * w) * 0.0025 else { return nil }
+    let near = [best + buckets - 1, best, best + 1].map { $0 % buckets }
+    return atan2(near.reduce(0) { $0 + hy[$1] }, near.reduce(0) { $0 + hx[$1] })
   }
-  let score = (0..<buckets).map { weight[($0 + buckets - 1) % buckets] * 0.5 + weight[$0] + weight[($0 + 1) % buckets] * 0.5 }
-  guard let best = score.indices.max(by: { score[$0] < score[$1] }),
-        score[best] > total * 0.002 else { return neutral }
-
-  // average hue over the winning neighbourhood
-  var x = 0.0, y = 0.0, s = 0.0, ww = 0.0
-  for k in [best + buckets - 1, best, best + 1].map({ $0 % buckets }) {
-    x += hx[k]; y += hy[k]; s += sat[k]; ww += weight[k]
-  }
-  var hue = atan2(y, x) / (2 * .pi); if hue < 0 { hue += 1 }
-  return normalizeAccent(NSColor(hue: hue, saturation: max(0.35, s / ww), brightness: 0.9, alpha: 1))
+  guard let hue = dominantHue(rows: max(1, h / 8)) ?? dominantHue(rows: h) else { return neutral }
+  return normalizeAccent(hue: hue)
 }
 
 func colorDistance(_ a: String, _ b: String) -> Int {
@@ -641,12 +780,9 @@ func fromOklch(_ L: Double, _ C: Double, _ h: Double) -> (Double, Double, Double
   return (linearToSrgb(max(0, r)), linearToSrgb(max(0, g)), linearToSrgb(max(0, b)))
 }
 
-/// Keep only the wallpaper's hue; give it a fixed, vivid tone so it reads as
-/// an accent against both the wallpaper and the dark islands.
-func normalizeAccent(_ c: NSColor) -> String {
-  let s = c.usingColorSpace(.sRGB)!
-  let (_, C, h) = toOklch(Double(s.redComponent), Double(s.greenComponent), Double(s.blueComponent))
-  if C < 0.02 { return "0xffc9ced6" } // no real hue: neutral
+/// Keep only the wallpaper's hue (OKLCH, radians); give it a fixed, vivid tone
+/// so it reads as an accent against both the wallpaper and the dark islands.
+func normalizeAccent(hue h: Double) -> String {
   var chroma = 0.15
   while chroma > 0.02 {
     if let (r, g, b) = fromOklch(0.78, chroma, h) {
@@ -1209,11 +1345,13 @@ final class Daemon {
     }
     ws.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
       self.scheduleAccent(delay: 2)
+      self.schedulePhase()
       self.scheduleMinute()
       triggerAsync("minute_change", [:])
     }
     NotificationCenter.default.addObserver(forName: .NSSystemClockDidChange, object: nil, queue: .main) { _ in
       self.scheduleMinute()
+      self.schedulePhase()
       triggerAsync("minute_change", [:])
     }
     ws.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { _ in self.scheduleAccent(delay: 2) }
@@ -1237,8 +1375,14 @@ final class Daemon {
     ws.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in
       if Date().timeIntervalSince(self.menu.clicked) > 1 { self.menu.hide() }
     }
-    // aerials drift slowly; re-sample now and then, only large changes are emitted
-    Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in self.scheduleAccent() }
+    // light/dark wallpaper variants follow the appearance
+    dnc.addObserver(forName: NSNotification.Name("AppleInterfaceThemeChangedNotification"), object: nil, queue: .main) { _ in
+      self.scheduleAccent(delay: 2)
+    }
+    NotificationCenter.default.addObserver(forName: .NSSystemTimeZoneDidChange, object: nil, queue: .main) { _ in
+      self.schedulePhase()
+    }
+    schedulePhase()
     emitLayout()
     scheduleMinute()
     scheduleAccent(delay: 0.3, force: true)
@@ -1281,10 +1425,42 @@ final class Daemon {
     let fd = open(dir, O_EVTONLY)
     guard fd >= 0 else { return }
     let src = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .rename, .extend], queue: .main)
-    src.setEventHandler { self.scheduleAccent(delay: 2, force: true) }
+    src.setEventHandler {
+      self.scheduleAccent(delay: 2, force: true)
+      self.schedulePhase()
+    }
     src.setCancelHandler { close(fd) }
     src.resume()
     watcher = src
+  }
+
+  var phaseTimer: Timer?
+
+  /// The accent is sampled on events only (wallpaper / space / display change,
+  /// wake); a dynamic wallpaper also switches frames by itself, at times known
+  /// from its schedule: re-sample a minute after the next switch. Without a
+  /// configured location the sun is placed at the time zone's reference city and
+  /// the real switch can come half an hour later: look again 45 minutes later
+  /// too (only a visible change is emitted).
+  func schedulePhase() {
+    work.async {
+      let next = nextWallpaperPhase()
+      DispatchQueue.main.async {
+        self.phaseTimer?.invalidate()
+        self.phaseTimer = nil
+        guard let next else { return }
+        let t = Timer(fire: next.addingTimeInterval(60), interval: 0, repeats: false) { _ in
+          self.scheduleAccent(delay: 0)
+          if sunLocation == nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 45 * 60) { self.scheduleAccent(delay: 0) }
+          }
+          self.schedulePhase()
+        }
+        t.tolerance = 30
+        RunLoop.main.add(t, forMode: .common)
+        self.phaseTimer = t
+      }
+    }
   }
 
   /// System Settings → Appearance → Icons (default / dark / clear / tinted) only
@@ -1610,7 +1786,10 @@ final class SidecarSleep {
 
 let args = Array(CommandLine.arguments.dropFirst())
 switch args.first {
-case "daemon": Daemon(cornerRadius: CGFloat(args.count > 1 ? Double(args[1]) ?? 0 : 0)).run()
+case "daemon":
+  // daemon <corner radius> [LAT LON]
+  sunLocation = parseLocation(args.dropFirst(2))
+  Daemon(cornerRadius: CGFloat(args.count > 1 ? Double(args[1]) ?? 0 : 0)).run()
 case "shape":
   var rest = args.dropFirst()
   while rest.count >= 7 { shape(rest.prefix(7)); rest = rest.dropFirst(7) }
@@ -1623,6 +1802,11 @@ case "measure":
   let f = font(args[1], args[2], CGFloat(Double(args[3]) ?? 12))
   for s in args.dropFirst(4) { print(String(format: "%.2f", textWidth(s, f))) }
 case "accent": print(accent())
+case "phase":
+  sunLocation = parseLocation(args.dropFirst())
+  if let frame = dynamicWallpaper()?.frame {
+    print(frame(Date()), nextWallpaperPhase().map { ISO8601DateFormatter.string(from: $0, timeZone: .current, formatOptions: [.withInternetDateTime]) } ?? "-")
+  }
 case "render": renderJobs(args.count > 1 ? args[1] : "[]")
 case "cursor":
   // x on the screen under the cursor, that screen's width and CGDirectDisplayID
@@ -1646,6 +1830,6 @@ case "screens":
 case "pick": Picker().run(args.count > 1 ? args[1] : "0xff8ec8ff")
 case "sleep": SidecarSleep().run()
 default:
-  FileHandle.standardError.write("usage: barhelper daemon|shape|icon|battery|measure|accent|layout|geometry|screens|render|cursor|pick|sleep\n".data(using: .utf8)!)
+  FileHandle.standardError.write("usage: barhelper daemon|shape|icon|battery|measure|accent|phase|layout|geometry|screens|render|cursor|pick|sleep\n".data(using: .utf8)!)
   exit(1)
 }

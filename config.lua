@@ -20,6 +20,10 @@ local M = {
   -- daemon masks the bottom ones to match with Apple's continuous corner of
   -- this radius (the curve reaches ~1.53 r along each edge). 0 = off.
   screen_corner = 21,
+  -- Where the sun is for dynamic wallpapers (latitude, longitude in degrees):
+  -- the daemon re-samples the accent when the wallpaper switches frames.
+  -- nil = the time zone's reference city, up to ~half an hour off.
+  location = { 59.94, 30.31 }, -- Saint Petersburg
   -- popups (battery tooltip, theme menu) float this far below the islands;
   -- height: a one-row popup (a theme menu row with its padding)
   popup  = { height = 34, radius = 11, offset = 7 },
