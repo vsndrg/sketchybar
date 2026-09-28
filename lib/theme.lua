@@ -46,7 +46,7 @@ function M.apply()
     corner = M.corner, corner_max = config.corner.max,
     family = font.text, size = font.size, battery = font.battery,
     primary = font.bold, secondary = font.medium, weights = font.weights,
-    popup_h = popup.height, popup_offset = popup.offset,
+    popup_h = popup.height, popup_r = popup.radius, popup_offset = popup.offset,
   })
 end
 

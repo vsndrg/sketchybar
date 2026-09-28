@@ -18,8 +18,11 @@ local M = {
   -- this radius (the curve reaches ~1.53 r along each edge). 0 = off.
   screen_corner = 21,
   -- popups (battery tooltip, theme menu) float this far below the islands;
-  -- height: a one-row popup (a theme menu row with its padding)
-  popup  = { height = 34, offset = 7 },
+  -- height: a one-row popup (a theme menu row with its padding); radius: the
+  -- theme menu's, macOS 26's own menu radius (NSPopupMenuWindow reports 12;
+  -- SwiftUI has no default for it: plain glass is a capsule, a
+  -- ConcentricRectangle in a borderless panel is square)
+  popup  = { height = 34, offset = 7, radius = 12 },
 
   font = {
     text   = "SF Pro Text",
@@ -38,12 +41,13 @@ local M = {
 
 -- Islands hang `gap` from the top and end flush with the bar (the notch
 -- strip): 32 - gap tall. Inner pills are concentric (inset 3).
--- Corner radius: one number for islands, menu and tooltip, set with the slider
--- in the right-click menu (lib/theme.lua keeps it), from 0 to the built-in
--- panel's own radius (`screen_corner`). Each shape takes min(radius, its
--- height / 2) (the helper daemon derives them): the island caps at a capsule
--- (13), the menu (64pt) at ~21. Default h / (2 * 1.528): the largest radius
--- at which Apple's continuous corner still fits the island unclamped.
+-- Corner radius: one number for islands and the tooltip (the menu keeps the
+-- system menu radius), set with the slider in the right-click menu
+-- (lib/theme.lua keeps it), from 0 to the built-in panel's own radius
+-- (`screen_corner`). Each shape takes min(radius, its height / 2) (the helper
+-- daemon derives them): the island caps at a capsule (13). Default
+-- h / (2 * 1.528): the largest radius at which Apple's continuous corner still
+-- fits the island unclamped.
 do
   local g = M.bar.gap
   local h = M.bar.height - g

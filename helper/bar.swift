@@ -20,12 +20,12 @@ let aerospaceBin = "/opt/homebrew/bin/aerospace"
 struct BarStyle: Equatable {
   var gap: CGFloat = 6, bar: CGFloat = 32
   var pillH: CGFloat = 20, inset: CGFloat = 3
-  /// One corner radius for everything (the menu's slider, 0...cornerMax); each
+  /// Corner radius of the islands and the tooltip (the menu slider, 0...cornerMax); each
   /// shape takes min(corner, its height / 2), inner pills concentric
   var corner: CGFloat = 8.5, cornerMax: CGFloat = 21
   var family = "SF Pro Text", size: CGFloat = 12.5, battery: CGFloat = 10
   var primary = "Regular", secondary = "Light"
-  var popupH: CGFloat = 34, popupOffset: CGFloat = 7
+  var popupH: CGFloat = 34, popupR: CGFloat = 12, popupOffset: CGFloat = 7 // popupR: the menu's (system)
   var weights = ["Regular", "Medium", "Semibold"]
 
   var island: CGFloat { bar - gap }
@@ -82,7 +82,7 @@ func parseBarState(_ data: Data) -> BarState? {
     y.size = cg(st, "size", y.size); y.battery = cg(st, "battery", y.battery)
     y.primary = st["primary"] as? String ?? y.primary
     y.secondary = st["secondary"] as? String ?? y.secondary
-    y.popupH = cg(st, "popup_h", y.popupH)
+    y.popupH = cg(st, "popup_h", y.popupH); y.popupR = cg(st, "popup_r", y.popupR)
     y.popupOffset = cg(st, "popup_offset", y.popupOffset)
     y.weights = st["weights"] as? [String] ?? y.weights
     s.style = y
@@ -429,8 +429,8 @@ struct MenuView: View {
   @Namespace var ns
 
   var pad: CGFloat { (m.style.popupH - 24) / 2 * m.scale }
-  /// two rows of 24 and the padding
-  var radius: CGFloat { min(m.style.corner * m.scale, pad + 24 * m.scale + 3 * m.scale) }
+  /// the system menu radius (not the slider's)
+  var radius: CGFloat { m.style.popupR * m.scale }
   var pill: RoundedRectangle { RoundedRectangle(cornerRadius: max(0, radius - pad), style: .continuous) }
 
   /// live: false is the invisible copy that sizes the panel while the glass is out

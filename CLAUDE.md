@@ -98,9 +98,11 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   (rejected) — keep gaps measured from the window.
 - Islands: regular Liquid Glass, no tint, continuous corners; lens h−6, concentric (inset 3).
   Corner radius = ONE number (menu slider 0…screen_corner 21, saved in the theme state, default
-  h/3.056 = 8.5); every shape takes min(r, its height/2) in the daemon (island caps at a capsule 13 —
-  SwiftUI renders any r ≥ h/2 identically, verified; menu 64pt tall caps ~21). User asked for "the
-  display's rounding" (2026-09-28); no public API / published value → screen_corner (user-tuned).
+  h/3.056 = 8.5) for islands + tooltip; each takes min(r, its height/2) in the daemon (island caps at
+  a capsule 13 — SwiftUI renders any r ≥ h/2 identically, verified). User asked for "the display's
+  rounding" (2026-09-28); no public API / published value → screen_corner (user-tuned). The theme
+  menu keeps the SYSTEM menu radius 12 (user): NSPopupMenuWindow `_bottomCornerRadius`; SwiftUI has
+  no default (plain `.glassEffect()` = capsule, ConcentricRectangle in a borderless panel = square).
   Picked in prototypes side by side (2026-09-28): user wants "the cleanest, default Apple look".
   Lens = light glass (regular, 30% white tint; the clear one got lost on dark wallpapers) on the
   focused display, regular glass on the others. Moves on the default `.bouncy` (user picked it; slower custom
