@@ -76,7 +76,8 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   it itself (mouseDown/Dragged, knob 22pt measured), previews on every bar live, sends
   `ID=corner.<r>` to Lua only on release. Popups appear like the prototype (user wanted that, not a
   window fade): glass inserted into a GlassEffectContainer on `.bouncy`, `.materialize` transition,
-  panel ordered out once removed. First render of a new panel is slow → both warmed at daemon start.
+  panel ordered out once removed; panels have a 20pt transparent margin (the (de)materializing blur
+  spreads past the shape, the panel edge cut it). First render of a new panel is slow → warmed at start.
 - SbarLua ignores SIGCHLD except around its `os.execute` (default for system()): a `sbar.exec` child
   exiting then stays a zombie, and with a zombie `io.popen`'s pclose can hang forever (XNU wait4) →
   the whole bar froze. → No `os.execute` after `require("sketchybar")` (use `lib/sh.lua` at startup),

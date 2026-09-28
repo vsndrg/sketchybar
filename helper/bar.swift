@@ -502,10 +502,16 @@ struct MenuView: View {
         }
       }
     }
+    .padding(popupMargin)
     .coordinateSpace(name: "bar")
     .onPreferenceChange(HitKey.self) { m.hits = $0.filter { !$0.key.isEmpty } }
   }
 }
+
+/// Transparent room around a popup: (de)materializing glass blurs past its
+/// shape, and the panel's edge cut it off (a hard edge on the left). Fully
+/// transparent pixels let clicks through.
+let popupMargin: CGFloat = 20
 
 /// Width of the system slider's knob (measured on macOS 26).
 let sliderKnob: CGFloat = 22
@@ -547,7 +553,8 @@ final class GlassMenu {
     let size = host.fittingSize
     let f = sc.frame
     // right edge at the islands', top popupOffset below them (the strip's bottom)
-    panel.setFrame(NSRect(x: f.maxX - style.gap - size.width, y: f.maxY - strip - style.popupOffset - size.height,
+    let m = popupMargin
+    panel.setFrame(NSRect(x: f.maxX - style.gap - size.width + m, y: f.maxY - strip - style.popupOffset - size.height + m,
                           width: size.width, height: size.height), display: true)
   }
 
@@ -672,6 +679,7 @@ struct TipView: View {
       }
     }
     .fixedSize()
+    .padding(popupMargin)
   }
 }
 
@@ -695,9 +703,10 @@ final class GlassTip {
     host.layoutSubtreeIfNeeded()
     let size = host.fittingSize
     let f = screen(did)?.frame ?? anchor
-    let x = min(max(f.minX + style.gap, anchor.midX - size.width / 2), f.maxX - style.gap - size.width)
-    panel.setFrame(NSRect(x: x, y: anchor.minY - style.popupOffset - size.height, width: size.width, height: size.height),
-                   display: true)
+    let m = popupMargin, w = size.width - 2 * m
+    let x = min(max(f.minX + style.gap, anchor.midX - w / 2), f.maxX - style.gap - w)
+    panel.setFrame(NSRect(x: x - m, y: anchor.minY - style.popupOffset - size.height + m,
+                          width: size.width, height: size.height), display: true)
     if shownOn == 0 {
       panel.alphaValue = 1
       panel.orderFrontRegardless()
