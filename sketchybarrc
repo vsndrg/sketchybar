@@ -5,7 +5,7 @@ local dir = os.getenv("CONFIG_DIR") or (home .. "/.config/sketchybar")
 package.path = dir .. "/?.lua;" .. dir .. "/?/init.lua;" .. package.path
 package.cpath = package.cpath .. ";" .. home .. "/.local/share/sketchybar_lua/?.so"
 
--- Native helper (squircles, wallpaper accent, layout, color picker).
+-- Native helper (draws the bar, keyboard layout, Sidecar, screen corners).
 os.execute("make -s -C '" .. dir .. "/helper' >/dev/null 2>&1")
 
 sbar = require("sketchybar")
@@ -15,98 +15,24 @@ local sh = require("lib.sh")
 
 sbar.begin_config()
 
-sbar.bar({
-  position = "top",
-  height = config.bar.height,
-  color = 0x00000000,
-  border_width = 0,
-  shadow = false,
-  blur_radius = 0,
-  padding_left = config.bar.margin,
-  padding_right = config.bar.margin,
-  topmost = "off",
-  sticky = true,
-  font_smoothing = false,
-})
+-- The bar is drawn by the helper daemon (Liquid Glass windows, see
+-- lib/bar.lua); sketchybar only runs the logic and delivers the events.
+sbar.bar({ hidden = "on", topmost = "off", sticky = true, height = config.bar.height })
 
-sbar.default({
-  updates = "when_shown",
-  padding_left = 0,
-  padding_right = 0,
-  icon = {
-    font = { family = config.font.text, style = config.font.bold, size = config.font.size },
-    color = 0xfff5f5f7,
-    padding_left = 0,
-    padding_right = 0,
-  },
-  label = {
-    font = { family = config.font.text, style = config.font.medium, size = config.font.size },
-    color = 0xfff5f5f7,
-    padding_left = 0,
-    padding_right = 0,
-  },
-  background = { drawing = false, color = 0, border_width = 0, corner_radius = 0 },
-  popup = { background = { drawing = false, color = 0, border_width = 0 }, blur_radius = 0 },
-})
-
--- left: workspaces (one fixed-width item, edge → notch)
+-- left: workspaces
 require("items.spaces")
-
--- right: layout │ battery │ clock (one fixed-width item, notch → edge)
+-- right: layout │ battery │ clock
 require("items.status")
--- right click anywhere on the bar: accent and text weight (a helper daemon window)
+-- right click anywhere on the bar: text weight
 require("items.theme_menu")
-
--- Main screen geometry (notch) is read at startup; other displays coming and
--- going are handled live by items.spaces. display_change also fires without
--- any real change (on reloads, Sidecar reconnects), so reload only when the
--- main screen actually differs — otherwise the bar reload-loops.
--- While asleep (lid closed) macOS swaps in a virtual 1920×960 @1x display:
--- ignored, the geometry is checked again after wake. Closing the lid on the
--- charger swaps the main screen (iPad, then the virtual one) a moment BEFORE
--- system_will_sleep, so a change must still hold 2 s later: a reload then
--- would restart the helper daemon just as it has to remember the iPad.
-local displays = sbar.add("item", "displays.watcher", { drawing = false, updates = true })
-local geometry_now = config.geometry
-local checking, asleep = false, false
-local function geometry(delay, f)
-  sbar.delay(delay, function()
-    sbar.exec("'" .. config.helper .. "' geometry", function(out)
-      f(type(out) == "string" and out:gsub("%s+$", "") or "")
-    end)
-  end)
-end
-local check_geometry
-function check_geometry()
-  if checking then return end
-  checking = true
-  geometry(1.0, function(g)
-    if asleep or g == "" or g == geometry_now then checking = false; return end
-    geometry(2.0, function(again)
-      checking = false
-      if asleep then return end
-      if again == g then
-        geometry_now = g
-        sbar.exec("sketchybar --reload")
-      elseif again ~= geometry_now then
-        check_geometry() -- still moving
-      end
-    end)
-  end)
-end
-displays:subscribe("display_change", check_geometry)
-displays:subscribe("system_will_sleep", function() asleep = true end)
-displays:subscribe("system_woke", function()
-  asleep = false
-  check_geometry()
-end)
 
 sbar.end_config()
 
 theme.apply()
 
--- The daemon fires layout_change / wallpaper_change / minute_change; start it once items exist.
+-- The daemon draws the bar and fires layout_change / minute_change / menu_select;
+-- start it once items exist.
 sh.run("pkill -f 'barhelper daemon' 2>/dev/null; (nohup '" .. config.helper .. "' daemon " .. config.screen_corner
-  .. (config.location and (" " .. config.location[1] .. " " .. config.location[2]) or "") .. " >/dev/null 2>&1 &)")
+  .. " >/dev/null 2>&1 &)")
 
 sbar.event_loop()
