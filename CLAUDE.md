@@ -7,7 +7,7 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
 - `~/.config/sketchybar` — bar logic (Lua via SbarLua) + native helper `helper/{main,bar}.swift` (`make -C helper`);
   the helper daemon DRAWS the bar (`bar.swift`, SwiftUI Liquid Glass)
 - `~/.config/borders` — JankyBorders patches; NOT started any more (removed 2026-09-28 with the accent)
-- `~/.config/aerospace` — `aerospace.toml`, `patches/{switch-flicker,monitors,queries}.patch`,
+- `~/.config/aerospace` — `aerospace.toml`, `patches/{switch-flicker,monitors,queries,window-hiding}.patch`,
   `patches/build.sh [--install|--restore]` (source in `~/.cache/aerospace-src`, builds offline)
 - `~/.config` is also a repo with NO commits and secrets staged (`github-copilot/auth.db`) — don't commit it.
 
@@ -60,6 +60,9 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   idle sleep: iPads connected at willSleep + ones lost in the 30s before it (the lid may drop the iPad
   first). The list lives in `~/.local/state/sketchybar/sidecar-reconnect`, so a restarted daemon
   (sketchybar reload) picks it up. Log: `~/.local/state/sketchybar/sleep.log`.
+- AeroSpace hides windows 1pt inside a bottom corner of their monitor; a monitor below (iPad above
+  the Mac) showed them. window-hiding.patch picks the corner covering the least of other monitors,
+  incl. top ones (beside the monitor, top aligned). macOS pulls a window with 0pt inside back 40pt.
 - AeroSpace moves windows via AX, per app, async; no atomic switch possible without SIP. Patches reorder/wait.
 - AeroSpace forgets window→workspace on restart; `build.sh --install` snapshots and restores it.
 - AeroSpace build is signed with local cert `aerospace-local-codesign` (login keychain) so the Accessibility
