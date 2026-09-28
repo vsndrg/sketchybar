@@ -26,6 +26,14 @@ require("items.status")
 -- right click anywhere on the bar: text weight
 require("items.theme_menu")
 
+-- cmd-shift-b (aerospace.toml) hides / shows the bar on every display
+sbar.add("event", "bar_toggle")
+local hidden = false
+sbar.add("item", "bar.events", { drawing = false, updates = true }):subscribe("bar_toggle", function()
+  hidden = not hidden
+  require("lib.bar").set("hidden", hidden)
+end)
+
 sbar.end_config()
 
 theme.apply()

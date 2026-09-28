@@ -54,6 +54,7 @@ struct StatusState: Equatable {
 }
 
 struct BarState: Equatable {
+  var hidden = false // cmd-shift-b
   var style = BarStyle()
   var displays: [DisplayState] = []
   var status = StatusState()
@@ -66,6 +67,7 @@ private func cg(_ d: [String: Any], _ k: String, _ def: CGFloat) -> CGFloat {
 func parseBarState(_ data: Data) -> BarState? {
   guard let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
   var s = BarState()
+  s.hidden = j["hidden"] as? Bool ?? false
   if let st = j["style"] as? [String: Any] {
     var y = BarStyle()
     y.gap = cg(st, "gap", y.gap); y.bar = cg(st, "bar", y.bar); y.radius = cg(st, "radius", y.radius)
@@ -620,12 +622,17 @@ final class GlassBar {
         if m.status != new.status { m.status = new.status }
       }
       if moved { withAnimation(.bouncy, update) } else { update() }
-      if !p.isVisible { p.orderFrontRegardless() }
+      if new.hidden { p.orderOut(nil) } else if !p.isVisible { p.orderFrontRegardless() }
     }
     for (did, p) in panels where !seen.contains(did) {
       p.orderOut(nil)
       panels[did] = nil
       models[did] = nil
+    }
+    if new.hidden {
+      menu.hide()
+      tip.hide()
+      tipOn = 0
     }
     menu.update(style: new.style)
     if tipOn != 0, let b = new.status.battery, tip.model.text != b.status { showTip(on: tipOn) }
