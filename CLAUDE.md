@@ -26,6 +26,12 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   acceptsFirstMouse; hit testing uses frames the SwiftUI layout reports (HitKey), not SwiftUI
   gestures. Fully transparent pixels let clicks through to the desktop → the strip has a 0.002-alpha
   background (right click anywhere on the strip opens the theme menu).
+- Glass looks "active" (harder blur + brightening layer, bright rims) only in a key window; the bar's
+  panels must never be key (a key nonactivating panel takes the keyboard — verified). Public knobs
+  (appearsActive, controlActiveState, canBecomeKey, isKeyWindow override, system glass tint) don't
+  help; Apple forum thread 818901 unanswered. → `ActivePanel` overrides the private
+  `_hasActiveAppearance` → YES (user approved the private override 2026-09-28). becomesKeyOnlyIfNeeded
+  also forces the dull look.
 - Lens (selected workspace): glass whose frame animates must be `.interactive()` — a plain glass
   effect re-animates from its old place once the frame animation ends (lens snapped back, ran again).
 - Apple gives no public "selection lens" (the iOS Photos segmented lens): macOS segmented controls
@@ -83,8 +89,8 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   (rejected) — keep gaps measured from the window.
 - Islands: regular Liquid Glass, no tint, continuous corners r = h/3.056; lens h−6, concentric (inset 3).
   Picked in prototypes side by side (2026-09-28): user wants "the cleanest, default Apple look".
-  Lens = clear glass (bright rim, refracts the icons under it) on the focused display, regular glass
-  on the others (Apple's non-key look). Moves on the default `.bouncy` (user picked it; slower custom
+  Lens = light glass (regular, 30% white tint; the clear one got lost on dark wallpapers) on the
+  focused display, regular glass on the others. Moves on the default `.bouncy` (user picked it; slower custom
   springs rejected), clamped to the island. Hover: `.primary` fill 18% (10% was barely visible).
   No accent anywhere; no active-window border. Text/icons: system label colors (glass adapts).
 - Built-in display bottom corners are masked to match the physical top ones: helper daemon `Corners`
