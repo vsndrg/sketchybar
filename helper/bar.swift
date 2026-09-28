@@ -122,6 +122,9 @@ final class BarModel: ObservableObject {
   @Published var hover: Int?
   /// bumped when app icons change (system icon theme)
   @Published var iconEpoch = 0
+  /// false until the panel is first shown: the bar is laid out zero wide, then
+  /// springs open (the islands fly in from the left edge)
+  @Published var appeared = false
   var hits: [String: CGRect] = [:] // "ws.N" | "input" | "battery" | "clock", view points from the top-left
 
   init(_ d: DisplayState) {
@@ -349,6 +352,8 @@ struct BarView: View {
     .background(Color.black.opacity(0.002))
     .coordinateSpace(name: "bar")
     .onPreferenceChange(HitKey.self) { m.hits = $0 }
+    .frame(width: m.appeared ? nil : 0)
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 
@@ -810,7 +815,11 @@ final class GlassBar {
       seen.insert(d.did)
       let m: BarModel
       if let x = models[d.did] { m = x } else {
+        // the whole state before the first layout, so every island takes part
+        // in the appearance (an island added later just fades in in place)
         m = BarModel(d)
+        m.style = new.style
+        m.status = new.status
         models[d.did] = m
         panels[d.did] = makePanel(m)
       }
@@ -826,6 +835,10 @@ final class GlassBar {
       }
       if moved { withAnimation(.bouncy, update) } else { update() }
       if new.hidden { p.orderOut(nil) } else if !p.isVisible { p.orderFrontRegardless() }
+      if p.isVisible && !m.appeared {
+        p.contentView?.layoutSubtreeIfNeeded() // the zero-wide layout to spring from
+        withAnimation(.bouncy) { m.appeared = true }
+      }
     }
     for (did, p) in panels where !seen.contains(did) {
       p.orderOut(nil)

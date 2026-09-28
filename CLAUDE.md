@@ -123,6 +123,9 @@ The user speaks Russian; answer in Russian. Details of every change are in `git 
   level: primary weight, `config.font.battery` 10pt, knocked out of a solid body (charged part opaque,
   rest 0.4) like macOS — readable wherever the fill edge falls; drawn as a template image (tinted like
   text), red when low. Battery tooltip wording = macOS menu.
+- Appearance (daemon start, new display, first show): a new panel's model gets the whole state before its
+  first layout, laid out zero wide, then `appeared` springs open on `.bouncy` — islands fly in from the
+  left. Was an accident of the first update coalescing with the resize; the battery (nil at first) only faded.
 - Clock: the daemon fires `minute_change` on every minute boundary (one timer, re-aligned on wake /
   clock change) → Lua → bar.json. The 60s routine (battery) is the clock's fallback.
 
