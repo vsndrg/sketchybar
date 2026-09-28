@@ -1,28 +1,17 @@
 // barhelper — native side of the bar.
 //
-//   barhelper daemon                              watch layout / wallpaper, fire sketchybar events,
-//                                                 show the theme menu on a right click on the bar
-//   barhelper shape W H R FILL STROKE SW OUT [...] continuous-corner (squircle) PNGs, 7 args each
-//   barhelper icon SIZE BUNDLE OUT [...]          app icon PNGs rendered at exact pixel size
-//   barhelper battery PCT STATE COLOR OUT         battery with the level printed inside
-//                                                 (STATE: 0 battery, 1 charging, 2 on AC)
-//   barhelper measure FAMILY STYLE SIZE TEXT...   text widths in points, one per line
-//   barhelper accent                              print wallpaper accent (0xAARRGGBB)
-//   barhelper phase [LAT LON]                     dynamic wallpaper: "<frame now> <next switch>" (nothing if static)
-//   barhelper layout [next]                       print / switch keyboard layout
-//   barhelper geometry                            main screen: "<screen_w> <left_of_notch_w> <right_of_notch_w> <scale>"
-//   barhelper screens                             per display: "<NSScreen index, 1-based> <CGDirectDisplayID> <w> <left_of_notch_w|0>"
-//                                                 (maps aerospace's monitor-appkit-nsscreen-screens-id to displays)
-//   barhelper render JSON                         whole islands as single images, prints JSON meta
-//   barhelper cursor                              global cursor x
-//   barhelper pick 0xAARRGGBB                     native color panel, live preview, prints result
-//   barhelper sleep                               end Sidecar sessions, then sleep the system (F6 in Karabiner;
-//                                                 the daemon reconnects the iPad after wake)
+//   barhelper daemon RADIUS    draws the bar (Liquid Glass windows, bar.swift) from the state lua writes,
+//                              fires sketchybar events (layout, minute, menu picks), masks the built-in
+//                              display's bottom corners (RADIUS, 0 = off), reconnects Sidecar after wake
+//   barhelper layout [next]    print / switch keyboard layout
+//   barhelper screens          per display: "<NSScreen index, 1-based> <CGDirectDisplayID> <w> <left_of_notch_w|0>
+//                              <menu bar height> <kind>" (maps aerospace's monitor-appkit-nsscreen-screens-id)
+//   barhelper sleep            end Sidecar sessions, then sleep the system (F6 in Karabiner;
+//                              the daemon reconnects the iPad after wake)
 
 import AppKit
 import Carbon
 import IOKit.pwr_mgt
-import ScreenCaptureKit
 import SwiftUI
 
 let sketchybar = FileManager.default.isExecutableFile(atPath: "/opt/homebrew/bin/sketchybar")
@@ -45,82 +34,11 @@ func trigger(_ event: String, _ vars: [String: String]) {
   p.waitUntilExit()
 }
 
-// MARK: - Colors
-
-func parseColor(_ s: String) -> CGColor {
-  let v = UInt32(s.replacingOccurrences(of: "0x", with: ""), radix: 16) ?? 0xffffffff
-  func c(_ shift: UInt32) -> CGFloat { CGFloat((v >> shift) & 0xff) / 255 }
-  return CGColor(srgbRed: c(16), green: c(8), blue: c(0), alpha: c(24))
-}
-
-func hex(_ c: NSColor) -> String {
-  let s = c.usingColorSpace(.sRGB) ?? c
-  func b(_ x: CGFloat) -> Int { Int((max(0, min(1, x)) * 255).rounded()) }
-  return String(format: "0x%02x%02x%02x%02x", b(s.alphaComponent), b(s.redComponent), b(s.greenComponent), b(s.blueComponent))
-}
-
-// MARK: - Rendering
-
-let backing: CGFloat = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
-
-/// scale: pixel density relative to the backing scale; shown at 1/backing the
-/// image is a crisp scaled copy (a shorter bar strip on some display).
-func render(_ w: CGFloat, _ h: CGFloat, to out: String, scale: CGFloat = 1, _ draw: (CGContext) -> Void) {
-  let density = backing * scale
-  // an empty/invalid size renders nothing; the caller keeps its previous image
-  guard w.isFinite, h.isFinite, w >= 1, h >= 1, density > 0,
-        let cs = CGColorSpace(name: CGColorSpace.sRGB),
-        let ctx = CGContext(data: nil, width: Int((w * density).rounded()), height: Int((h * density).rounded()),
-                            bitsPerComponent: 8, bytesPerRow: 0, space: cs,
-                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
-  ctx.scaleBy(x: density, y: density)
-  ctx.setShouldAntialias(true)
-  ctx.interpolationQuality = .high
-  draw(ctx)
-  guard let image = ctx.makeImage() else { return }
-  let rep = NSBitmapImageRep(cgImage: image)
-  let tmp = out + ".\(getpid()).tmp"
-  try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: tmp))
-  // atomic swap so sketchybar never reads a half-written file
-  _ = rename(tmp, out)
-}
+// MARK: - Drawing
 
 /// Apple's continuous corner curve, exactly as the system draws it.
 func squircle(_ rect: CGRect, _ r: CGFloat) -> CGPath {
   RoundedRectangle(cornerRadius: r, style: .continuous).path(in: rect).cgPath
-}
-
-func shape(_ a: ArraySlice<String>) {
-  let a = Array(a)
-  let w = CGFloat(Double(a[0])!), h = CGFloat(Double(a[1])!), r = CGFloat(Double(a[2])!)
-  let fill = parseColor(a[3]), stroke = parseColor(a[4])
-  let sw = CGFloat(Double(a[5])!)
-  render(w, h, to: a[6]) { ctx in
-    let rect = CGRect(x: 0, y: 0, width: w, height: h)
-    ctx.addPath(squircle(rect, r)); ctx.setFillColor(fill); ctx.fillPath()
-    if sw > 0, stroke.alpha > 0 {
-      let inset = rect.insetBy(dx: sw / 2, dy: sw / 2)
-      ctx.addPath(squircle(inset, max(0, r - sw / 2)))
-      ctx.setStrokeColor(stroke); ctx.setLineWidth(sw); ctx.strokePath()
-    }
-  }
-}
-
-func icon(size: CGFloat, bundle: String, out: String) {
-  let ws = NSWorkspace.shared
-  let img: NSImage
-  if let url = ws.urlForApplication(withBundleIdentifier: bundle) {
-    img = ws.icon(forFile: url.path)
-  } else {
-    img = ws.icon(for: .applicationBundle)
-  }
-  render(size, size, to: out) { ctx in
-    NSGraphicsContext.saveGraphicsState()
-    NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
-    NSGraphicsContext.current?.imageInterpolation = .high
-    img.draw(in: CGRect(x: 0, y: 0, width: size, height: size), from: .zero, operation: .sourceOver, fraction: 1)
-    NSGraphicsContext.restoreGraphicsState()
-  }
 }
 
 func font(_ family: String, _ style: String, _ size: CGFloat) -> NSFont {
@@ -128,10 +46,6 @@ func font(_ family: String, _ style: String, _ size: CGFloat) -> NSFont {
   return NSFont(descriptor: d, size: size) ?? .systemFont(ofSize: size, weight: .semibold)
 }
 
-func textWidth(_ s: String, _ f: NSFont) -> CGFloat {
-  let line = CTLineCreateWithAttributedString(NSAttributedString(string: s, attributes: [.font: f]))
-  return CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
-}
 
 /// Battery, drawn like macOS: a solid squircle body, the charged part opaque,
 /// the rest translucent, the level knocked out of the whole body (readable
@@ -183,286 +97,6 @@ func drawBattery(_ ctx: CGContext, at origin: CGPoint, level: Int, state: Int, c
   ctx.restoreGState()
 }
 
-func battery(_ a: [String]) {
-  let level = Int(a[0]) ?? 100, state = Int(a[1]) ?? 0
-  render(batteryWidth(state), batteryHeight, to: a[3]) { ctx in
-    drawBattery(ctx, at: .zero, level: level, state: state, color: parseColor(a[2]))
-  }
-}
-
-// MARK: - Wallpaper accent
-
-/// The live wallpaper layer (works for aerials / dynamic wallpapers), no windows on top.
-func captureWallpaper() -> CGImage? {
-  guard CGPreflightScreenCaptureAccess() else { return nil }
-  let sem = DispatchSemaphore(value: 0)
-  var result: CGImage?
-  Task.detached {
-    defer { sem.signal() }
-    guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true),
-          let display = content.displays.first(where: { CGDisplayIsBuiltin($0.displayID) != 0 }) ?? content.displays.first
-    else { return }
-    let wallpapers = content.windows.filter {
-      $0.title == "Wallpaper" && $0.owningApplication?.bundleIdentifier == "com.apple.WindowManager"
-        && $0.frame.intersects(display.frame)
-    }
-    guard !wallpapers.isEmpty else { return }
-    let cfg = SCStreamConfiguration()
-    cfg.width = 192
-    cfg.height = Int(192 * display.frame.height / max(1, display.frame.width))
-    cfg.showsCursor = false
-    let filter = SCContentFilter(display: display, including: wallpapers)
-    result = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: cfg)
-  }
-  _ = sem.wait(timeout: .now() + 3)
-  return result
-}
-
-/// Aerials have no image file; fall back to the thumbnail of the chosen variant.
-func aerialThumbnail() -> CGImage? {
-  let base = NSHomeDirectory() + "/Library/Application Support/com.apple.wallpaper"
-  guard let content = desktopWallpaperContent(),
-        (content["Choices"] as? [[String: Any]])?.first?["Provider"] as? String == "com.apple.wallpaper.choice.aerials"
-  else { return nil }
-  var ids: [String] = []
-  if let opts = content["EncodedOptionValues"] as? Data,
-     let o = try? PropertyListSerialization.propertyList(from: opts, format: nil) as? [String: Any],
-     let v = (((o["values"] as? [String: Any])?["aerialVariant"] as? [String: Any])?["picker"] as? [String: Any])?["_0"] as? [String: Any],
-     let id = v["id"] as? String { ids.append(id) }
-  if let choice = (content["Choices"] as? [[String: Any]])?.first, let cfg = choice["Configuration"] as? Data,
-     let c = try? PropertyListSerialization.propertyList(from: cfg, format: nil) as? [String: Any],
-     let id = c["assetID"] as? String { ids.append(id) }
-  for id in ids {
-    let url = URL(fileURLWithPath: base + "/aerials/thumbnails/\(id).png")
-    if let img = loadThumb(url) { return img }
-  }
-  return nil
-}
-
-func loadThumb(_ url: URL) -> CGImage? {
-  guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-  return CGImageSourceCreateThumbnailAtIndex(src, 0, [
-    kCGImageSourceCreateThumbnailFromImageAlways: true,
-    kCGImageSourceThumbnailMaxPixelSize: 192,
-  ] as CFDictionary)
-}
-
-func wallpaperImage() -> CGImage? {
-  if let img = captureWallpaper() { return img }
-  if let dyn = dynamicWallpaper(), let src = CGImageSourceCreateWithURL(dyn.url as CFURL, nil),
-     let img = CGImageSourceCreateThumbnailAtIndex(src, dyn.frame(Date()), [
-       kCGImageSourceCreateThumbnailFromImageAlways: true,
-       kCGImageSourceThumbnailMaxPixelSize: 192,
-     ] as CFDictionary) { return img }
-  if let img = aerialThumbnail() { return img }
-  let screen = NSScreen.screens.first { $0.auxiliaryTopLeftArea != nil } ?? NSScreen.main
-  if let url = screen.flatMap({ NSWorkspace.shared.desktopImageURL(for: $0) }) { return loadThumb(url) }
-  return nil
-}
-
-// MARK: - Dynamic wallpaper phases
-//
-// A dynamic wallpaper is a HEIC with several frames and a schedule in its XMP:
-// `apple_desktop:solar` (sun altitude/azimuth per frame) or `apple_desktop:h24`
-// (time of day per frame). WindowManager shows the frame closest to the sun's
-// (or clock's) position, so the next switch is known in advance: the daemon
-// re-samples the accent then instead of polling. The sun is placed at
-// `sunLocation` (config.lua `location`), else at the time zone's reference city
-// (zone.tab) — no location access — which can be off by half an hour; the
-// daemon then looks again later (see Daemon.schedulePhase).
-
-/// Latitude/longitude (radians) from the daemon's arguments, nil = unknown.
-var sunLocation: (Double, Double)?
-
-func parseLocation(_ a: ArraySlice<String>) -> (Double, Double)? {
-  guard a.count >= 2, let lat = Double(a[a.startIndex]), let lon = Double(a[a.startIndex + 1]) else { return nil }
-  return (lat * .pi / 180, lon * .pi / 180)
-}
-
-/// Desktop wallpaper settings (all spaces and displays) from the wallpaper store.
-func desktopWallpaperContent() -> [String: Any]? {
-  let path = NSHomeDirectory() + "/Library/Application Support/com.apple.wallpaper/Store/Index.plist"
-  guard let data = FileManager.default.contents(atPath: path),
-        let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-        let desk = (root["AllSpacesAndDisplays"] as? [String: Any])?["Desktop"] as? [String: Any]
-  else { return nil }
-  return desk["Content"] as? [String: Any]
-}
-
-func plist(_ data: Any?) -> [String: Any]? {
-  (data as? Data).flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] }
-}
-
-/// The desktop wallpaper's HEIC and the frame it shows at a given date, if it
-/// is dynamic (and set to follow the time of day, not light/dark/appearance).
-func dynamicWallpaper() -> (url: URL, frame: (Date) -> Int)? {
-  guard let content = desktopWallpaperContent(),
-        let choice = (content["Choices"] as? [[String: Any]])?.first else { return nil }
-  let style = (((plist(content["EncodedOptionValues"])?["values"] as? [String: Any])?["style"]
-    as? [String: Any])?["picker"] as? [String: Any]).flatMap { ($0["_0"] as? [String: Any])?["id"] as? String }
-  if let style, style != "dynamic" { return nil }
-  // system pictures: a .madesktop plist naming a downloaded asset; own files: the .heic itself
-  let urls = [((plist(choice["Configuration"])?["url"] as? [String: Any])?["relative"] as? String)]
-    + ((choice["Files"] as? [[String: Any]]) ?? []).map { ($0["relative"] as? String) }
-  guard var url = urls.compactMap({ $0.flatMap(URL.init(string:)) }).first else { return nil }
-  if url.pathExtension == "madesktop" {
-    guard let d = FileManager.default.contents(atPath: url.path),
-          let m = try? PropertyListSerialization.propertyList(from: d, format: nil) as? [String: Any],
-          m["isDynamic"] as? Bool == true, let id = m["mobileAssetID"] as? String else { return nil }
-    url = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Application Support/com.apple.mobileAssetDesktop/\(id).heic")
-  }
-  guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
-        let meta = CGImageSourceCopyMetadataAtIndex(src, 0, nil) else { return nil }
-  func tag(_ name: String) -> [String: Any]? {
-    (CGImageMetadataCopyStringValueWithPath(meta, nil, name as CFString) as String?)
-      .flatMap { Data(base64Encoded: $0) }
-      .flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] }
-  }
-  if let solar = tag("apple_desktop:solar")?["si"] as? [[String: Any]] {
-    let frames = solar.compactMap { f -> (alt: Double, az: Double, i: Int)? in
-      guard let a = (f["a"] as? NSNumber)?.doubleValue, let z = (f["z"] as? NSNumber)?.doubleValue,
-            let i = (f["i"] as? NSNumber)?.intValue else { return nil }
-      return (a * .pi / 180, z * .pi / 180, i)
-    }
-    guard !frames.isEmpty else { return nil }
-    let (lat, lon) = sunLocation ?? timeZoneLocation()
-    return (url, { date in
-      let sun = sunPosition(date, lat: lat, lon: lon)
-      // nearest frame on the sky (great-circle distance)
-      return frames.max { f, g in
-        func closeness(_ f: (alt: Double, az: Double, i: Int)) -> Double {
-          sin(f.alt) * sin(sun.alt) + cos(f.alt) * cos(sun.alt) * cos(f.az - sun.az)
-        }
-        return closeness(f) < closeness(g)
-      }!.i
-    })
-  }
-  if let h24 = tag("apple_desktop:h24")?["ti"] as? [[String: Any]] {
-    let frames = h24.compactMap { f -> (t: Double, i: Int)? in
-      guard let t = (f["t"] as? NSNumber)?.doubleValue, let i = (f["i"] as? NSNumber)?.intValue else { return nil }
-      return (t, i)
-    }.sorted { $0.t < $1.t }
-    guard let last = frames.last else { return nil }
-    return (url, { date in
-      let c = Calendar.current.dateComponents([.hour, .minute], from: date)
-      let t = (Double(c.hour ?? 0) + Double(c.minute ?? 0) / 60) / 24
-      return (frames.last { $0.t <= t } ?? last).i
-    })
-  }
-  return nil
-}
-
-/// When the dynamic wallpaper switches to another frame next (minute precision).
-func nextWallpaperPhase(after start: Date = Date()) -> Date? {
-  guard let frame = dynamicWallpaper()?.frame else { return nil }
-  let now = frame(start)
-  for m in 1...(26 * 60) {
-    let t = start.addingTimeInterval(Double(m) * 60)
-    if frame(t) != now { return t }
-  }
-  return nil
-}
-
-/// Latitude/longitude (radians) of the current time zone's reference city.
-func timeZoneLocation() -> (Double, Double) {
-  let tz = TimeZone.current
-  let fallback = (45 * Double.pi / 180, Double(tz.secondsFromGMT()) / 240 * .pi / 180)
-  guard let tab = try? String(contentsOfFile: "/usr/share/zoneinfo/zone.tab", encoding: .utf8),
-        let line = tab.split(separator: "\n").first(where: { $0.split(separator: "\t").dropFirst(2).first == Substring(tz.identifier) })
-  else { return fallback }
-  // ±DDMM[SS]±DDDMM[SS]
-  let coord = String(line.split(separator: "\t")[1])
-  guard let split = coord.dropFirst().firstIndex(where: { $0 == "+" || $0 == "-" }) else { return fallback }
-  func angle(_ s: Substring, degDigits: Int) -> Double {
-    let sign: Double = s.first == "-" ? -1 : 1
-    let d = Array(s.dropFirst()).map { Double(String($0)) ?? 0 }
-    func num(_ r: Range<Int>) -> Double { r.upperBound <= d.count ? r.reduce(0) { $0 * 10 + d[$1] } : 0 }
-    let deg = num(0..<degDigits), min = num(degDigits..<degDigits + 2), sec = num(degDigits + 2..<degDigits + 4)
-    return sign * (deg + min / 60 + sec / 3600) * .pi / 180
-  }
-  return (angle(coord[..<split], degDigits: 2), angle(coord[split...], degDigits: 3))
-}
-
-/// Sun altitude and azimuth (radians, azimuth clockwise from north), low-precision
-/// ephemeris (≈0.01° — far below what matters for picking a frame).
-func sunPosition(_ date: Date, lat: Double, lon: Double) -> (alt: Double, az: Double) {
-  let rad = Double.pi / 180
-  let d = date.timeIntervalSince1970 / 86400 - 10957.5 // days since J2000.0
-  let g = (357.529 + 0.98560028 * d) * rad
-  let q = 280.459 + 0.98564736 * d
-  let l = (q + 1.915 * sin(g) + 0.020 * sin(2 * g)) * rad
-  let e = (23.439 - 0.00000036 * d) * rad
-  let ra = atan2(cos(e) * sin(l), cos(l)), dec = asin(sin(e) * sin(l))
-  let gmst = (280.46061837 + 360.98564736629 * d) * rad
-  let ha = gmst + lon - ra
-  let alt = asin(sin(lat) * sin(dec) + cos(lat) * cos(dec) * cos(ha))
-  let az = atan2(-sin(ha), tan(dec) * cos(lat) - sin(lat) * cos(ha))
-  return (alt, az < 0 ? az + 2 * .pi : az)
-}
-
-/// The hue that covers most of the wallpaper right under the bar (its top
-/// eighth; the whole wallpaper if that strip is gray). Area-weighted, not the
-/// most saturated one: a sunset glow at the horizon would win that, and a dark
-/// orange island is just brown — the sky it hangs on is what the bar goes with.
-func accent() -> String {
-  let neutral = "0xffc9ced6"
-  guard let img = wallpaperImage() else { return neutral }
-
-  let w = img.width, h = img.height
-  var px = [UInt8](repeating: 0, count: w * h * 4)
-  let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
-                      space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-  ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
-
-  /// Dominant hue of pixel rows 0..<rows (row 0 = top), nil if they're gray.
-  func dominantHue(rows: Int) -> Double? {
-    let buckets = 36
-    var weight = [Double](repeating: 0, count: buckets)
-    var hx = weight, hy = weight
-    for i in stride(from: 0, to: rows * w * 4, by: 4) {
-      let (L, C, hue) = toOklch(Double(px[i]) / 255, Double(px[i + 1]) / 255, Double(px[i + 2]) / 255)
-      guard L > 0.08, C > 0.02 else { continue }
-      let k = Int((hue < 0 ? hue + 2 * .pi : hue) / (2 * .pi) * Double(buckets)) % buckets
-      weight[k] += C; hx[k] += cos(hue) * C; hy[k] += sin(hue) * C
-    }
-    let score = (0..<buckets).map { weight[($0 + buckets - 1) % buckets] * 0.5 + weight[$0] + weight[($0 + 1) % buckets] * 0.5 }
-    // colored pixels must cover a meaningful part of the area (C ≈ 0.05 on 5% of it)
-    guard let best = score.indices.max(by: { score[$0] < score[$1] }),
-          score[best] > Double(rows * w) * 0.0025 else { return nil }
-    let near = [best + buckets - 1, best, best + 1].map { $0 % buckets }
-    return atan2(near.reduce(0) { $0 + hy[$1] }, near.reduce(0) { $0 + hx[$1] })
-  }
-  guard let hue = dominantHue(rows: max(1, h / 8)) ?? dominantHue(rows: h) else { return neutral }
-  return normalizeAccent(hue: hue)
-}
-
-func colorDistance(_ a: String, _ b: String) -> Int {
-  guard let x = UInt32(a.dropFirst(2), radix: 16), let y = UInt32(b.dropFirst(2), radix: 16) else { return 999 }
-  return [16, 8, 0].reduce(0) { $0 + abs(Int((x >> UInt32($1)) & 0xff) - Int((y >> UInt32($1)) & 0xff)) }
-}
-
-
-// MARK: - Whole-island rendering
-//
-// On macOS 26+ sketchybar can't batch window updates, so an island made of
-// several items can tear for a frame. Each island is therefore drawn here as
-// ONE image shown by ONE item: every state change is a single atomic update.
-
-func textLine(_ s: String, _ f: NSFont, _ c: CGColor) -> CTLine {
-  CTLineCreateWithAttributedString(NSAttributedString(string: s, attributes: [
-    .font: f, .foregroundColor: NSColor(cgColor: c) ?? .white,
-  ]))
-}
-
-func lineWidth(_ l: CTLine) -> CGFloat { CGFloat(CTLineGetTypographicBounds(l, nil, nil, nil)) }
-
-/// Draw with the cap height centered on `mid` (optical centering, like the menu bar).
-func drawLine(_ ctx: CGContext, _ l: CTLine, x: CGFloat, mid: CGFloat, _ f: NSFont) {
-  ctx.textPosition = CGPoint(x: x, y: mid - f.capHeight / 2)
-  CTLineDraw(l, ctx)
-}
-
 var iconCache: [String: NSImage] = [:]
 func appIcon(_ bundle: String) -> NSImage {
   if let i = iconCache[bundle] { return i }
@@ -473,325 +107,7 @@ func appIcon(_ bundle: String) -> NSImage {
   return img
 }
 
-var symbolCache: [String: NSImage] = [:]
-/// An SF Symbol `width` pt wide, tinted `color`.
-func symbolImage(_ name: String, _ width: CGFloat, _ color: CGColor) -> NSImage? {
-  let key = "\(name)|\(width)|\(color)"
-  if let i = symbolCache[key] { return i }
-  // point size ≈ 3/4 of the width: device symbols are wider than tall
-  guard let sym = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
-    .withSymbolConfiguration(.init(pointSize: width * 0.75, weight: .semibold)),
-    let tint = NSColor(cgColor: color) else { return nil }
-  let img = NSImage(size: sym.size, flipped: false) { r in
-    sym.draw(in: r)
-    tint.set()
-    r.fill(using: .sourceAtop)
-    return true
-  }
-  symbolCache[key] = img
-  return img
-}
-
-/// NSImage.draw sets its own opacity (ignores the context alpha): pass it here.
-func drawIcon(_ ctx: CGContext, _ img: NSImage, _ rect: CGRect, alpha: CGFloat = 1) {
-  NSGraphicsContext.saveGraphicsState()
-  NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
-  NSGraphicsContext.current?.imageInterpolation = .high
-  img.draw(in: rect, from: .zero, operation: .sourceOver, fraction: alpha)
-  NSGraphicsContext.restoreGraphicsState()
-}
-
-func num(_ d: [String: Any], _ k: String, _ def: CGFloat = 0) -> CGFloat {
-  (d[k] as? NSNumber).map { CGFloat($0.doubleValue) } ?? def
-}
-func str(_ d: [String: Any], _ k: String, _ def: String = "") -> String { d[k] as? String ?? def }
-func col(_ d: [String: Any], _ k: String) -> CGColor { parseColor(str(d, k, "0x00000000")) }
-
-func islandBackground(_ ctx: CGContext, _ j: [String: Any], w: CGFloat, h: CGFloat) {
-  let rect = CGRect(x: 0, y: 0, width: w, height: h)
-  let r = num(j, "r")
-  ctx.addPath(squircle(rect, r)); ctx.setFillColor(col(j, "fill")); ctx.fillPath()
-  let sw = num(j, "sw")
-  if sw > 0 {
-    ctx.addPath(squircle(rect.insetBy(dx: sw / 2, dy: sw / 2), max(0, r - sw / 2)))
-    ctx.setStrokeColor(col(j, "stroke")); ctx.setLineWidth(sw); ctx.strokePath()
-  }
-}
-
-struct Laid {
-  let w: CGFloat
-  let draw: (CGContext) -> Void
-  var ranges: [[CGFloat]] = []
-}
-
-/// Workspaces island. Hit ranges (relative to the island) map clicks back.
-func layoutSpaces(_ j: [String: Any]) -> Laid {
-  let h = num(j, "h"), inset = num(j, "inset"), pad = num(j, "pad"), numGap = num(j, "num_gap")
-  let iconSize = num(j, "icon"), slot = num(j, "slot"), tail = num(j, "tail")
-  let pillH = num(j, "pill_h"), pillR = num(j, "pill_r")
-  let f = font(str(j, "font"), str(j, "style"), num(j, "size"))
-  let small = font(str(j, "font"), str(j, "style"), num(j, "size") - 1.5)
-  let maxSlots = Int(num(j, "max_slots", 8))
-  let wss = j["workspaces"] as? [[String: Any]] ?? []
-
-  let deviceW = num(j, "device_w"), deviceSlot = num(j, "device_slot")
-
-  // focused: the workspace shown on this display (pill; "pill_idle" when the
-  // display isn't the focused one). device: it lives on another display —
-  // that display's glyph (SF Symbol) sits between the digit and the icons.
-  // ring: the focused workspace, seen from another display — a dashed
-  // outline in the accent.
-  struct WS { let n: Int; let focused: Bool; let idle: Bool; let device: NSImage?; let ring: Bool; let hovered: Bool; let label: CTLine; let labelW: CGFloat; let apps: [String]; let overflow: Int; let w: CGFloat }
-  var items: [WS] = []
-  for ws in wss {
-    let n = Int(num(ws, "n")), focused = (ws["focused"] as? Bool) ?? false
-    let idle = focused && ((ws["idle"] as? Bool) ?? false)
-    let device = focused ? nil : (ws["device"] as? String).flatMap { symbolImage($0, deviceW, col(j, "dim")) }
-    let ring = !focused && ((ws["ring"] as? Bool) ?? false)
-    let hovered = !focused && ((ws["hovered"] as? Bool) ?? false)
-    let all = ws["apps"] as? [String] ?? []
-    let shown = all.count > maxSlots ? Array(all.prefix(maxSlots - 1)) : all
-    let overflow = all.count > maxSlots ? all.count - shown.count : 0
-    let label = textLine("\(n)", f, col(j, focused ? "fg" : (hovered ? "hover_fg" : "dim")))
-    let lw = ceil(lineWidth(label))
-    let slots = CGFloat(shown.count + (overflow > 0 ? 1 : 0))
-    // an empty workspace ends with the glyph itself: pad after it, like after a digit
-    let w = slots > 0 ? pad + lw + numGap + (device == nil ? 0 : deviceSlot) + slots * slot + tail
-                      : pad + lw + (device == nil ? 0 : numGap + deviceW) + pad
-    items.append(WS(n: n, focused: focused, idle: idle, device: device, ring: ring, hovered: hovered, label: label, labelW: lw, apps: shown, overflow: overflow, w: w))
-  }
-  let width = items.reduce(inset) { $0 + $1.w + inset }
-  var ranges: [[CGFloat]] = []
-  var x = inset
-  for ws in items {
-    ranges.append([CGFloat(ws.n), x - inset / 2, x + ws.w + inset / 2])
-    x += ws.w + inset
-  }
-  return Laid(w: width, draw: { ctx in
-    islandBackground(ctx, j, w: width, h: h)
-    let mid = h / 2
-    var x = inset
-    for ws in items {
-      if ws.focused || ws.hovered {
-        let pill = CGRect(x: x, y: (h - pillH) / 2, width: ws.w, height: pillH)
-        ctx.addPath(squircle(pill, pillR))
-        ctx.setFillColor(col(j, ws.focused ? (ws.idle ? "pill_idle" : "pill") : "hover")); ctx.fillPath()
-      }
-      if ws.ring {
-        let lw = num(j, "ring_w", 1.25)
-        let pill = CGRect(x: x, y: (h - pillH) / 2, width: ws.w, height: pillH).insetBy(dx: lw / 2, dy: lw / 2)
-        ctx.saveGState()
-        ctx.addPath(squircle(pill, max(0, pillR - lw / 2)))
-        ctx.setStrokeColor(col(j, "ring")); ctx.setLineWidth(lw)
-        ctx.setLineDash(phase: 0, lengths: [3, 2.5])
-        ctx.strokePath()
-        ctx.restoreGState()
-      }
-      drawLine(ctx, ws.label, x: x + pad, mid: mid, f)
-      var ix = x + pad + ws.labelW + numGap
-      if let g = ws.device {
-        let gh = deviceW * g.size.height / g.size.width
-        drawIcon(ctx, g, CGRect(x: ix, y: mid - gh / 2, width: deviceW, height: gh))
-        ix += deviceSlot
-      }
-      for app in ws.apps {
-        drawIcon(ctx, appIcon(app), CGRect(x: ix + (slot - iconSize) / 2, y: (h - iconSize) / 2, width: iconSize, height: iconSize))
-        ix += slot
-      }
-      if ws.overflow > 0 {
-        let l = textLine("+\(ws.overflow)", small, col(j, "dim"))
-        drawLine(ctx, l, x: ix + (slot - lineWidth(l)) / 2, mid: mid, small)
-      }
-      x += ws.w + inset
-    }
-  }, ranges: ranges)
-}
-
-/// Generic island: a row of parts (text / battery / gap) between two paddings.
-func layoutIsland(_ j: [String: Any]) -> Laid {
-  let h = num(j, "h")
-  let parts = j["parts"] as? [[String: Any]] ?? []
-  struct Part { let w: CGFloat; let draw: (CGContext, CGFloat) -> Void }
-  var laid: [Part] = []
-  for p in parts {
-    switch str(p, "type") {
-    case "text":
-      let f = font(str(p, "font", "SF Pro Text"), str(p, "style", "Medium"), num(p, "size", 12.5))
-      let l = textLine(str(p, "text"), f, col(p, "color"))
-      let tw = lineWidth(l)
-      var minW = num(p, "min_w")
-      if let t = p["min_text"] as? String { minW = max(minW, lineWidth(textLine(t, f, col(p, "color")))) }
-      let w = ceil(max(tw, minW))
-      let align = str(p, "align", "left")
-      laid.append(Part(w: w) { ctx, x in
-        let dx = align == "right" ? w - tw : (align == "center" ? (w - tw) / 2 : 0)
-        drawLine(ctx, l, x: x + dx, mid: h / 2, f)
-      })
-    case "battery":
-      let state = Int(num(p, "state")), level = Int(num(p, "level"))
-      let c = col(p, "color"), style = str(p, "style", "Bold"), size = num(p, "size", 10)
-      laid.append(Part(w: batteryWidth(state)) { ctx, x in
-        drawBattery(ctx, at: CGPoint(x: x, y: (h - batteryHeight) / 2), level: level, state: state, color: c,
-                    style: style, size: size)
-      })
-    default:
-      laid.append(Part(w: num(p, "w")) { _, _ in })
-    }
-  }
-  let pl = num(j, "pad_l"), pr = num(j, "pad_r")
-  let width = pl + laid.reduce(0) { $0 + $1.w } + pr
-  return Laid(w: width, draw: { ctx in
-    islandBackground(ctx, j, w: width, h: h)
-    var x = pl
-    for p in laid { p.draw(ctx, x); x += p.w }
-  })
-}
-
-/// The theme menu: Lua lays it out (entries with rects in pt from the top-left),
-/// this only draws it. Entries: "text" (centered) or "swatch" (a color dot);
-/// a selected text entry sits on a pill, a selected swatch gets a white dot.
-/// It floats over windows, so it casts a shadow like a system menu (a tight
-/// contact one and a soft wide one) into a margin of `m` around it; a
-/// non-key window's own shadow is too faint to separate it from them.
-func layoutMenu(_ j: [String: Any]) -> Laid {
-  let w = num(j, "w"), h = num(j, "h"), m = num(j, "m")
-  let entries = j["entries"] as? [[String: Any]] ?? []
-  return Laid(w: w + 2 * m, draw: { ctx in
-    ctx.translateBy(x: m, y: m)
-    let body = squircle(CGRect(x: 0, y: 0, width: w, height: h), num(j, "r"))
-    for (blur, dy, alpha) in [(CGFloat(22), CGFloat(-8), CGFloat(0.6)), (3, -1, 0.6)] {
-      ctx.saveGState()
-      ctx.setShadow(offset: CGSize(width: 0, height: dy), blur: blur, color: CGColor(gray: 0, alpha: alpha))
-      ctx.addPath(body); ctx.setFillColor(col(j, "fill")); ctx.fillPath()
-      ctx.restoreGState()
-    }
-    islandBackground(ctx, j, w: w, h: h)
-    for e in entries {
-      let r = CGRect(x: num(e, "x"), y: h - num(e, "y") - num(e, "h"), width: num(e, "w"), height: num(e, "h"))
-      let selected = (e["selected"] as? Bool) ?? false
-      if str(e, "type") == "swatch" {
-        let d = num(e, "d")
-        let dot = CGRect(x: r.midX - d / 2, y: r.midY - d / 2, width: d, height: d)
-        ctx.addEllipse(in: dot); ctx.setFillColor(col(e, "color")); ctx.fillPath()
-        ctx.addEllipse(in: dot.insetBy(dx: 0.5, dy: 0.5))
-        ctx.setStrokeColor(col(e, "ring")); ctx.setLineWidth(1); ctx.strokePath()
-        if selected {
-          let m = num(e, "mark")
-          ctx.addEllipse(in: CGRect(x: r.midX - m / 2, y: r.midY - m / 2, width: m, height: m))
-          ctx.setFillColor(CGColor(gray: 1, alpha: 1)); ctx.fillPath()
-        }
-        continue
-      }
-      if selected {
-        ctx.addPath(squircle(r, num(j, "pill_r"))); ctx.setFillColor(col(j, "pill")); ctx.fillPath()
-      }
-      let f = font(str(e, "font"), str(e, "style"), num(e, "size"))
-      let l = textLine(str(e, "text"), f, col(e, "color"))
-      drawLine(ctx, l, x: r.midX - lineWidth(l) / 2, mid: r.midY, f)
-    }
-  })
-}
-
-func layoutJob(_ j: [String: Any]) -> Laid {
-  switch str(j, "kind") {
-  case "spaces": return layoutSpaces(j)
-  case "menu": return layoutMenu(j)
-  default: return layoutIsland(j)
-  }
-}
-
-/// A fixed-size canvas holding one or more islands. The item showing it never
-/// changes size, so sketchybar never resizes its window: every update is a
-/// pure content swap, i.e. exactly one frame.
-///   canvas_w   fixed width (or center_from_right: canvas grows to center the
-///              content at that distance from the right edge — for tooltips)
-///   align      "left" | "right"
-///   gap        space between islands
-func renderRow(_ j: [String: Any]) -> [String: Any] {
-  let h = num(j, "h")
-  let gap = num(j, "gap")
-  let laid = (j["islands"] as? [[String: Any]] ?? []).map(layoutJob)
-  let total = laid.reduce(0) { $0 + $1.w } + gap * CGFloat(max(0, laid.count - 1))
-  var canvas = num(j, "canvas_w")
-  if let c = j["center_from_right"] as? NSNumber { canvas = CGFloat(c.doubleValue) + total / 2 }
-  canvas = max(canvas, total)
-  let start = str(j, "align") == "right" ? canvas - total : 0
-  var meta: [[String: Any]] = []
-  var x = start
-  for l in laid {
-    meta.append(["x0": x, "x1": x + l.w, "ranges": l.ranges])
-    x += l.w + gap
-  }
-  render(canvas, h, to: str(j, "out"), scale: j["scale"] == nil ? 1 : num(j, "scale")) { ctx in
-    var x = start
-    for l in laid {
-      ctx.saveGState(); ctx.translateBy(x: x, y: 0); l.draw(ctx); ctx.restoreGState()
-      x += l.w + gap
-    }
-  }
-  return ["width": canvas, "islands": meta]
-}
-
-/// `barhelper render '<json array of row jobs>'` → JSON array of metadata.
-func renderJobs(_ json: String) {
-  guard let data = json.data(using: .utf8),
-        let jobs = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-    print("[]"); return
-  }
-  var out: [[String: Any]] = []
-  for j in jobs {
-    var meta = renderRow(j)
-    let path = str(j, "out")
-    guard FileManager.default.fileExists(atPath: path) else { continue } // nothing rendered
-    meta["out"] = path
-    out.append(meta)
-  }
-  guard let d = try? JSONSerialization.data(withJSONObject: out), let text = String(data: d, encoding: .utf8) else {
-    print("[]"); return
-  }
-  print(text)
-}
-
-// MARK: - OKLCH (perceptual accent normalization)
-
-func srgbToLinear(_ c: Double) -> Double { c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
-func linearToSrgb(_ c: Double) -> Double { c <= 0.0031308 ? 12.92 * c : 1.055 * pow(c, 1 / 2.4) - 0.055 }
-
-func toOklch(_ r: Double, _ g: Double, _ b: Double) -> (L: Double, C: Double, h: Double) {
-  let (lr, lg, lb) = (srgbToLinear(r), srgbToLinear(g), srgbToLinear(b))
-  let l = cbrt(0.4122214708 * lr + 0.5363325363 * lg + 0.0514459929 * lb)
-  let m = cbrt(0.2119034982 * lr + 0.6806995451 * lg + 0.1073969566 * lb)
-  let s = cbrt(0.0883024619 * lr + 0.2817188376 * lg + 0.6299787005 * lb)
-  let L = 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s
-  let A = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s
-  let B = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s
-  return (L, sqrt(A * A + B * B), atan2(B, A))
-}
-
-func fromOklch(_ L: Double, _ C: Double, _ h: Double) -> (Double, Double, Double)? {
-  let A = C * cos(h), B = C * sin(h)
-  let l = pow(L + 0.3963377774 * A + 0.2158037573 * B, 3)
-  let m = pow(L - 0.1055613458 * A - 0.0638541728 * B, 3)
-  let s = pow(L - 0.0894841775 * A - 1.2914855480 * B, 3)
-  let r = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s
-  let g = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s
-  let b = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s
-  guard [r, g, b].allSatisfy({ $0 >= -0.0005 && $0 <= 1.0005 }) else { return nil }
-  return (linearToSrgb(max(0, r)), linearToSrgb(max(0, g)), linearToSrgb(max(0, b)))
-}
-
-/// Keep only the wallpaper's hue (OKLCH, radians); give it a fixed, vivid tone
-/// so it reads as an accent against both the wallpaper and the dark islands.
-func normalizeAccent(hue h: Double) -> String {
-  var chroma = 0.15
-  while chroma > 0.02 {
-    if let (r, g, b) = fromOklch(0.78, chroma, h) {
-      return hex(NSColor(srgbRed: r, green: g, blue: b, alpha: 1))
-    }
-    chroma -= 0.005
-  }
-  return "0xffc9ced6"
-}
+// MARK: - Displays
 
 func displayID(_ s: NSScreen) -> CGDirectDisplayID {
   (s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
@@ -827,15 +143,6 @@ func menuBarHeights() -> [CGDirectDisplayID: Int] {
     }
   }
   return out
-}
-
-/// The bar is drawn on every display, so positions are relative to the screen
-/// under the cursor: returns (x from that screen's left edge, its width).
-func cursorOnScreen() -> (x: CGFloat, width: CGFloat, display: CGDirectDisplayID) {
-  let p = NSEvent.mouseLocation
-  guard let screen = NSScreen.screens.first(where: { NSMouseInRect(p, $0.frame, false) }) ?? NSScreen.main
-  else { return (p.x, 0, 0) }
-  return (p.x - screen.frame.minX, screen.frame.width, displayID(screen))
 }
 
 // MARK: - Keyboard layout
@@ -955,12 +262,8 @@ final class Corners {
 // MARK: - Daemon
 
 final class Daemon {
-  var lastAccent = ""
-  var pending: DispatchWorkItem?
-  var watcher: DispatchSourceFileSystemObject?
   var prefsWatcher: DispatchSourceFileSystemObject?
   var iconTheme = Daemon.iconTheme()
-  let work = DispatchQueue(label: "accent")
   let corners: Corners
   let bar = GlassBar()
   let sidecar = SidecarReconnect()
@@ -989,7 +292,7 @@ final class Daemon {
   }
 
   /// Exit together with sketchybar (the daemon is detached via nohup, so it
-  /// would otherwise keep capturing the wallpaper and spawning failing
+  /// would otherwise keep showing a bar nobody updates and spawning failing
   /// triggers after the bar is stopped).
   func exitWithSketchybar() {
     let p = Process()
@@ -1053,77 +356,9 @@ final class Daemon {
     triggerAsync("layout_change", ["LAYOUT": l])
   }
 
-  var pendingForce = false
-
-  func scheduleAccent(delay: Double = 1.0, force: Bool = false) {
-    pending?.cancel()
-    // a forced update (new wallpaper) survives being rescheduled by a
-    // non-forced one (e.g. a space change right after)
-    pendingForce = pendingForce || force
-    let item = DispatchWorkItem {
-      let force = self.pendingForce
-      self.pendingForce = false
-      self.work.async {
-        let a = accent()
-        DispatchQueue.main.async {
-          if force || self.lastAccent.isEmpty || colorDistance(a, self.lastAccent) > 36 {
-            self.lastAccent = a
-            triggerAsync("wallpaper_change", ["ACCENT": a])
-          }
-        }
-      }
-    }
-    pending = item
-    DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
-  }
-
-  // The wallpaper store plist is replaced atomically, so watch its directory.
-  func watchWallpaperStore() {
-    let dir = NSHomeDirectory() + "/Library/Application Support/com.apple.wallpaper/Store"
-    let fd = open(dir, O_EVTONLY)
-    guard fd >= 0 else { return }
-    let src = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .rename, .extend], queue: .main)
-    src.setEventHandler {
-      self.scheduleAccent(delay: 2, force: true)
-      self.schedulePhase()
-    }
-    src.setCancelHandler { close(fd) }
-    src.resume()
-    watcher = src
-  }
-
-  var phaseTimer: Timer?
-
-  /// The accent is sampled on events only (wallpaper / space / display change,
-  /// wake); a dynamic wallpaper also switches frames by itself, at times known
-  /// from its schedule: re-sample a minute after the next switch. Without a
-  /// configured location the sun is placed at the time zone's reference city and
-  /// the real switch can come half an hour later: look again 45 minutes later
-  /// too (only a visible change is emitted).
-  func schedulePhase() {
-    work.async {
-      let next = nextWallpaperPhase()
-      DispatchQueue.main.async {
-        self.phaseTimer?.invalidate()
-        self.phaseTimer = nil
-        guard let next else { return }
-        let t = Timer(fire: next.addingTimeInterval(60), interval: 0, repeats: false) { _ in
-          self.scheduleAccent(delay: 0)
-          if sunLocation == nil {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 45 * 60) { self.scheduleAccent(delay: 0) }
-          }
-          self.schedulePhase()
-        }
-        t.tolerance = 30
-        RunLoop.main.add(t, forMode: .common)
-        self.phaseTimer = t
-      }
-    }
-  }
-
   /// System Settings → Appearance → Icons (default / dark / clear / tinted) only
   /// changes global preferences; AppKit's own notification doesn't reach other
-  /// processes. The bar's app icons are baked into cached images, so tell lua.
+  /// processes. The bar's app icons are cached: re-read them.
   static func iconTheme() -> String {
     let keys = ["AppleIconAppearanceTheme", "AppleIconAppearanceTintColor"]
     return keys.map { k in
@@ -1146,45 +381,6 @@ final class Daemon {
     src.setCancelHandler { close(fd) }
     src.resume()
     prefsWatcher = src
-  }
-}
-
-// MARK: - Color picker
-
-final class Picker: NSObject {
-  var last = ""
-  var changed = false
-  var pending: DispatchWorkItem?
-
-  func run(_ initial: String) {
-    let app = NSApplication.shared
-    app.setActivationPolicy(.accessory)
-    let panel = NSColorPanel.shared
-    panel.showsAlpha = false
-    panel.isContinuous = true
-    panel.color = NSColor(cgColor: parseColor(initial)) ?? .systemBlue
-    last = hex(panel.color.withAlphaComponent(1))
-    panel.setTarget(self)
-    panel.setAction(#selector(colorChanged(_:)))
-    panel.title = "Bar accent"
-    NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: panel, queue: .main) { _ in
-      // closing without touching the color is a cancel (keeps Auto mode)
-      print(self.changed ? self.last : "cancel"); fflush(stdout); exit(0)
-    }
-    app.activate(ignoringOtherApps: true)
-    panel.center()
-    panel.makeKeyAndOrderFront(nil)
-    app.run()
-  }
-
-  @objc func colorChanged(_ sender: NSColorPanel) {
-    changed = true
-    last = hex(sender.color.withAlphaComponent(1))
-    pending?.cancel()
-    let c = last
-    let work = DispatchWorkItem { triggerAsync("accent_preview", ["ACCENT": c]) }
-    pending = work
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: work)
   }
 }
 
@@ -1445,39 +641,8 @@ final class SidecarSleep {
 let args = Array(CommandLine.arguments.dropFirst())
 switch args.first {
 case "daemon":
-  // daemon <corner radius> [LAT LON]
-  sunLocation = parseLocation(args.dropFirst(2))
   Daemon(cornerRadius: CGFloat(args.count > 1 ? Double(args[1]) ?? 0 : 0)).run()
-case "shape":
-  var rest = args.dropFirst()
-  while rest.count >= 7 { shape(rest.prefix(7)); rest = rest.dropFirst(7) }
-case "icon":
-  let size = CGFloat(Double(args[1]) ?? 18)
-  var rest = args.dropFirst(2)
-  while rest.count >= 2 { icon(size: size, bundle: rest.first!, out: rest.dropFirst().first!); rest = rest.dropFirst(2) }
-case "battery": battery(Array(args.dropFirst()))
-case "measure":
-  let f = font(args[1], args[2], CGFloat(Double(args[3]) ?? 12))
-  for s in args.dropFirst(4) { print(String(format: "%.2f", textWidth(s, f))) }
-case "accent": print(accent())
-case "phase":
-  sunLocation = parseLocation(args.dropFirst())
-  if let frame = dynamicWallpaper()?.frame {
-    print(frame(Date()), nextWallpaperPhase().map { ISO8601DateFormatter.string(from: $0, timeZone: .current, formatOptions: [.withInternetDateTime]) } ?? "-")
-  }
-case "render": renderJobs(args.count > 1 ? args[1] : "[]")
-case "cursor":
-  // x on the screen under the cursor, that screen's width and CGDirectDisplayID
-  let c = cursorOnScreen()
-  print(Int(c.x), Int(c.width), c.display)
 case "layout": if args.count > 1, args[1] == "next" { nextLayout() } else { print(layoutCode()) }
-case "geometry":
-  // the main screen (menu bar) — other displays don't affect the geometry
-  let s = NSScreen.screens.first!
-  let w = s.frame.width
-  let l = s.auxiliaryTopLeftArea?.width ?? w / 2
-  let r = s.auxiliaryTopRightArea?.width ?? w / 2
-  print(Int(w), Int(l), Int(r), backing)
 case "screens":
   // NSScreen index, CGDirectDisplayID, width, width left of the notch (0 = none), menu bar height, kind
   let menuBars = menuBarHeights()
@@ -1485,9 +650,8 @@ case "screens":
     print(i + 1, displayID(s), Int(s.frame.width), Int(s.auxiliaryTopLeftArea?.width ?? 0), menuBars[displayID(s)] ?? 0,
           displayKind(displayID(s)))
   }
-case "pick": Picker().run(args.count > 1 ? args[1] : "0xff8ec8ff")
 case "sleep": SidecarSleep().run()
 default:
-  FileHandle.standardError.write("usage: barhelper daemon|shape|icon|battery|measure|accent|phase|layout|geometry|screens|render|cursor|pick|sleep\n".data(using: .utf8)!)
+  FileHandle.standardError.write("usage: barhelper daemon|layout|screens|sleep\n".data(using: .utf8)!)
   exit(1)
 }
