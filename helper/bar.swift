@@ -210,6 +210,9 @@ struct WidthKey: PreferenceKey {
   static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
+/// The selection: light glass, like the selected tab's platter in iOS 26.
+let lensGlass = Glass.regular.tint(.white.opacity(0.3)).interactive()
+
 struct SpacesIsland: View {
   @ObservedObject var m: BarModel
   @Namespace var ns
@@ -254,10 +257,11 @@ struct SpacesIsland: View {
     .onChange(of: lensTarget) { moveLens(animated: true) }
     .background(alignment: .leading) {
       if lensTarget != nil {
-        // interactive: a plain glass effect re-animates from its old place once
-        // the frame animation ends (the lens snapped back and ran again)
+        // light glass on the focused display, plain on the others. Interactive:
+        // a plain glass effect re-animates from its old place once the frame
+        // animation ends (the lens snapped back and ran again)
         Color.clear
-          .glassEffect(m.display.focused ? .clear.interactive() : .regular.interactive(), in: pill)
+          .glassEffect(m.display.focused ? lensGlass : .regular.interactive(), in: pill)
           .modifier(LensFrame(lo: lo, hi: hi, maxX: rowW, height: st.pillH * s))
       }
     }
@@ -373,14 +377,23 @@ class TrackingHost<V: View>: NSHostingView<V> {
   override func rightMouseDown(with e: NSEvent) { onClick?(point(e), true) }
 }
 
+/// Glass in a key window blurs harder and adds a brightening layer (the
+/// "active" look); the daemon's windows never become key (that would take the
+/// keyboard from the app in front), so they got the dull inactive look. No
+/// public API covers this (Apple Developer Forums thread 818901, unanswered);
+/// AppKit asks the window's private _hasActiveAppearance: say yes, like the
+/// Dock. If it is ever renamed the bar just looks inactive again.
+final class ActivePanel: NSPanel {
+  @objc(_hasActiveAppearance) func hasActiveAppearance() -> Bool { true }
+}
+
 func barPanel(level: NSWindow.Level) -> NSPanel {
-  let p = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+  let p = ActivePanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
   p.isOpaque = false
   p.backgroundColor = .clear
   p.hasShadow = false
   p.hidesOnDeactivate = false
   p.acceptsMouseMovedEvents = true
-  p.becomesKeyOnlyIfNeeded = true
   p.level = level
   p.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
   return p
@@ -412,7 +425,7 @@ struct MenuView: View {
           .foregroundStyle(w == st.primary ? .primary : .secondary)
           .frame(width: 84 * s, height: 24 * s)
           .background {
-            if w == st.primary { Color.clear.glassEffect(.clear, in: pill) }
+            if w == st.primary { Color.clear.glassEffect(lensGlass, in: pill) }
             else if w == m.hover { pill.fill(.primary.opacity(0.18)) }
           }
           .hit("weight.\(w)")
